@@ -86,7 +86,7 @@ export const Login: React.FC = () => {
             )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight break-words drop-shadow-sm">
-            {isForgotPassword ? 'Reset Password' : workspaceName || 'Purva Vedic'}
+            {isForgotPassword ? 'Reset Password' : workspaceName || 'Purva Vedic Consultancy'}
           </h1>
           <p className="text-white/80 text-sm mt-2 font-medium">
             {isForgotPassword ? 'Enter your email to receive a reset link' : 'Project Management System'}

@@ -13,6 +13,7 @@ import {
   SelectTrigger, 
   SelectValue 
 } from './ui/select';
+import { parseISO, format, isValid, addDays } from 'date-fns';
 
 export const GlobalCalendar: React.FC<{ onProjectClick: (p: Project) => void }> = ({ onProjectClick }) => {
   const { user } = useUser();
@@ -66,7 +67,53 @@ export const GlobalCalendar: React.FC<{ onProjectClick: (p: Project) => void }> 
         project_name: p.name
       }));
 
-      setEvents([...taskEvents, ...projectEvents]);
+      // Fetch Leaves
+      let leavesData: any[] = [];
+      try {
+        const { data, error } = await supabase.from('leaves').select('*').eq('status', 'Approved');
+        if (!error && data) {
+          leavesData = data;
+        } else {
+          const local = localStorage.getItem('app-leaves-data');
+          if (local) {
+            leavesData = JSON.parse(local).filter((l: any) => l.status === 'Approved');
+          }
+        }
+      } catch (err) {
+        const local = localStorage.getItem('app-leaves-data');
+        if (local) {
+          leavesData = JSON.parse(local).filter((l: any) => l.status === 'Approved');
+        }
+      }
+
+      const leaveEvents: any[] = [];
+      leavesData.forEach((leave: any) => {
+        const start = parseISO(leave.start_date);
+        const end = parseISO(leave.end_date);
+        if (!isValid(start) || !isValid(end)) return;
+        
+        let current = start;
+        while (current <= end) {
+          let labelSuffix = '';
+          if (leave.duration_type === 'half') {
+            labelSuffix = ` (${leave.half_day_period === 'morning' ? 'Morning' : 'Afternoon'})`;
+          } else if (leave.duration_type === 'hourly') {
+            labelSuffix = ` (${leave.hourly_hours} hrs)`;
+          }
+          leaveEvents.push({
+            id: `${leave.id}-${format(current, 'yyyy-MM-dd')}`,
+            title: `On Leave: ${leave.employee_name} (${leave.leave_type}${labelSuffix})`,
+            date: format(current, 'yyyy-MM-dd'),
+            status: leave.status,
+            type: 'leave',
+            project_id: 'leave',
+            project_name: 'Leaves'
+          });
+          current = addDays(current, 1);
+        }
+      });
+
+      setEvents([...taskEvents, ...projectEvents, ...leaveEvents]);
     } catch (err: any) {
       console.error('Error fetching global calendar data:', err);
       toast.error('Failed to load calendar');
@@ -108,6 +155,7 @@ export const GlobalCalendar: React.FC<{ onProjectClick: (p: Project) => void }> 
               </SelectTrigger>
               <SelectContent className="rounded-xl">
                 <SelectItem value="all">{t('all_projects')}</SelectItem>
+                <SelectItem value="Leaves">Staff Leaves</SelectItem>
                 {projects.map(p => (
                   <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>
                 ))}

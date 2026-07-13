@@ -11,6 +11,7 @@ import { TeamManagement } from './components/TeamManagement';
 import { Profile } from './components/Profile';
 import { VendorManagement } from './components/VendorManagement';
 import { PettyCash } from './components/PettyCash';
+import { LeaveManagement } from './components/LeaveManagement';
 import { Login } from './components/Login';
 import { UpdatePassword } from './components/UpdatePassword';
 import { FileControls } from './components/FileControls';
@@ -149,6 +150,8 @@ function MainApp() {
         return <VendorManagement onProjectClick={handleProjectClick} />;
       case 'petty_cash':
         return <PettyCash />;
+      case 'leaves':
+        return <LeaveManagement />;
       case 'file_controls':
         return <FileControls />;
       case 'assets':

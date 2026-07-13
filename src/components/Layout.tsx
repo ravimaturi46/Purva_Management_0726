@@ -21,6 +21,7 @@ import {
   Sun,
   Moon,
   Briefcase,
+  CalendarDays,
 } from "lucide-react";
 import { useUser } from "../contexts/UserContext";
 import { useNotifications } from "../contexts/NotificationContext";
@@ -97,6 +98,7 @@ export const Layout: React.FC<LayoutProps> = ({
         { id: "calendar", label: t("calendar"), icon: CalendarIcon },
         { id: "vendors", label: t("vendors"), icon: Building2 },
         { id: "team", label: t("team"), icon: UsersIcon },
+        { id: "leaves", label: "Leaves", icon: CalendarDays },
         { id: "petty_cash", label: t("petty_cash"), icon: IndianRupee },
         { id: "assets", label: "Assets", icon: Briefcase },
         { id: "file_controls", label: t("control_panel"), icon: ShieldCheck },
@@ -107,6 +109,7 @@ export const Layout: React.FC<LayoutProps> = ({
         { id: "projects", label: t("projects"), icon: ListTodo },
         { id: "calendar", label: t("calendar"), icon: CalendarIcon },
         { id: "vendors", label: t("vendors"), icon: Building2 },
+        { id: "leaves", label: "Leaves", icon: CalendarDays },
         { id: "petty_cash", label: t("petty_cash"), icon: IndianRupee },
         { id: "assets", label: "Assets", icon: Briefcase },
       ];
@@ -114,6 +117,7 @@ export const Layout: React.FC<LayoutProps> = ({
       baseItems = [
         { id: "projects", label: t("projects"), icon: ListTodo },
         { id: "vendors", label: t("vendors"), icon: Building2 },
+        { id: "leaves", label: "Leaves", icon: CalendarDays },
         { id: "petty_cash", label: t("petty_cash"), icon: IndianRupee },
         { id: "assets", label: "Assets", icon: Briefcase },
       ];
@@ -122,6 +126,7 @@ export const Layout: React.FC<LayoutProps> = ({
         { id: "kanban", label: t("kanban"), icon: Trello },
         { id: "projects", label: t("projects"), icon: ListTodo },
         { id: "calendar", label: t("calendar"), icon: CalendarIcon },
+        { id: "leaves", label: "Leaves", icon: CalendarDays },
         { id: "petty_cash", label: t("petty_cash"), icon: IndianRupee },
       ];
     }

@@ -32,7 +32,7 @@ interface CalendarEvent {
   title: string;
   date: string | null;
   status?: string;
-  type: 'task' | 'project';
+  type: 'task' | 'project' | 'leave';
   project_name?: string;
 }
 
@@ -137,14 +137,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onEventClick
                     "text-[9px] font-bold p-1 rounded-md truncate border cursor-pointer hover:brightness-95 transition-all text-left",
                     event.type === 'project'
                       ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/20"
-                      : event.status === 'Completed' 
-                        ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-500/20" 
-                        : "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-500/20"
+                      : event.type === 'leave'
+                        ? "bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-500/20"
+                        : event.status === 'Completed' 
+                          ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-500/20" 
+                          : "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-500/20"
                   )}
                   title={`${event.type.toUpperCase()}: ${event.title}${event.project_name ? ` (${event.project_name})` : ''}`}
                 >
                   <span className="opacity-50 mr-1">
-                    {event.type === 'project' ? 'P:' : 'T:'}
+                    {event.type === 'project' ? 'P:' : event.type === 'leave' ? 'L:' : 'T:'}
                   </span>
                   {event.title}
                 </div>
@@ -204,13 +206,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ events, onEventClick
                 onClick={() => onEventClick?.(event)}
                 className={cn(
                   "p-3 rounded-xl border bg-white dark:bg-[#181818] shadow-sm hover:shadow-md transition-all cursor-pointer group",
-                  event.type === 'project' ? "border-amber-100 dark:border-amber-500/20" : "border-indigo-100 dark:border-indigo-500/20"
+                  event.type === 'project' ? "border-amber-100 dark:border-amber-500/20" : event.type === 'leave' ? "border-rose-100 dark:border-rose-500/20" : "border-indigo-100 dark:border-indigo-500/20"
                 )}
               >
                 <div className="flex items-center justify-between mb-1">
                   <Badge className={cn(
                     "text-[7px] font-black uppercase tracking-tighter px-1 py-0",
-                    event.type === 'project' ? "bg-amber-500 text-white" : "bg-indigo-500 text-white"
+                    event.type === 'project' ? "bg-amber-500 text-white" : event.type === 'leave' ? "bg-rose-500 text-white" : "bg-indigo-500 text-white"
                   )}>
                     {event.type}
                   </Badge>

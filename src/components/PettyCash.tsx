@@ -296,12 +296,20 @@ export function PettyCash() {
         const graphUrls = urls.filter(u => u.includes("sharepoint.com") || u.includes("1drv.ms"));
         const otherUrls = urls.filter(u => !u.includes("sharepoint.com") && !u.includes("1drv.ms"));
         
+        const statusEl = printWindow.document.getElementById('loading-status');
+        const progressEl = printWindow.document.getElementById('loading-progress-bar');
+        
+        if (statusEl) statusEl.innerText = `Found ${urls.length} images to load (${graphUrls.length} from SharePoint/OneDrive, ${otherUrls.length} standard attachments)...`;
+        if (progressEl) progressEl.style.width = '10%';
+        
         // 1. Batch Request to Graph API
         if (graphUrls.length > 0) {
           try {
             if (msAuthFailed) {
               console.warn("Skipping MSAL image fetch because auth failed.");
+              if (statusEl) statusEl.innerText = `Microsoft Auth not available. Skipping silent batch fetch and falling back to browser direct load...`;
             } else {
+              if (statusEl) statusEl.innerText = `Authenticating and requesting SharePoint images from Graph API...`;
               const token = await getGraphToken(false);
               
               // Helper to build candidates for a given URL
@@ -388,6 +396,8 @@ export function PettyCash() {
               const chunkSize = 4;
               for (let i = 0; i < graphUrls.length; i += chunkSize) {
                 const chunk = graphUrls.slice(i, i + chunkSize);
+                if (statusEl) statusEl.innerText = `Requesting SharePoint images chunk ${Math.floor(i/chunkSize) + 1} of ${Math.ceil(graphUrls.length/chunkSize)}...`;
+                if (progressEl) progressEl.style.width = `${10 + Math.floor((i / graphUrls.length) * 50)}%`;
                 const requests: any[] = [];
                 
                 chunk.forEach((url, urlIndex) => {
@@ -463,7 +473,11 @@ export function PettyCash() {
         }
         
         // 2. Fetch other non-Graph URLs sequentially or in parallel
+        let otherIndex = 0;
         for (const url of otherUrls) {
+          otherIndex++;
+          if (statusEl) statusEl.innerText = `Fetching attachment image ${otherIndex} of ${otherUrls.length}...`;
+          if (progressEl) progressEl.style.width = `${60 + Math.floor((otherIndex / otherUrls.length) * 35)}%`;
           try {
              let originalBlob;
              try {
@@ -493,6 +507,9 @@ export function PettyCash() {
              failedImages++;
           }
         }
+        
+        if (progressEl) progressEl.style.width = '100%';
+        if (statusEl) statusEl.innerText = `All images loaded! Generating print-friendly PDF view...`;
         
         return results;
       };
@@ -566,11 +583,11 @@ export function PettyCash() {
         
         canvas.toBlob((blob) => {
           if (blob) {
-            const webpFile = new File([blob], `${Date.now()}_receipt.webp`, { type: 'image/webp' });
-            setReceiptFile(webpFile);
+            const webpngFile = new File([blob], `${Date.now()}_receipt.png`, { type: 'image/png' });
+            setReceiptFile(webpngFile);
         }
           setIsCompressing(false);
-      }, 'image/webp', 0.8);
+      }, 'image/png');
     };
   };
 };
@@ -650,60 +667,84 @@ export function PettyCash() {
       let finalReceiptUrl = existingReceiptUrl;
       
       if (receiptFile) {
+        let uploadedUrl = "";
         try {
-          const client = await getGraphClient();
-          const folderPath = `PurvaVedic_PettyCash_Receipts/${user.id}`;
-          const encodedFolder = encodeURIComponent('PurvaVedic_PettyCash_Receipts') + '/' + encodeURIComponent(user.id);
-          const encodedFile = encodeURIComponent(receiptFile.name);
-          
-          if (receiptFile.size <= 4 * 1024 * 1024) {
-             await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/content`).put(receiptFile);
-        } else {
-             const uploadSession = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/createUploadSession`).post({
-               item: {
-                 "@microsoft.graph.conflictBehavior": "replace",
-                 "name": receiptFile.name
-             }
-           });
-             
-             const uploadUrl = uploadSession.uploadUrl;
-             const maxChunkSize = 320 * 1024 * 10;
-             const size = receiptFile.size;
-             let start = 0;
-             
-             while (start < size) {
-               const end = Math.min(start + maxChunkSize, size);
-               const chunk = receiptFile.slice(start, end);
-               const response = await fetch(uploadUrl, {
-                 method: 'PUT',
-                 headers: { 'Content-Range': `bytes ${start}-${end - 1}/${size}` },
-                 body: chunk
-             });
-               if (!response.ok) throw new Error(`Upload failed at chunk ${start}-${end}`);
-               start = end;
-           }
-        }
-          
-          let sharedUrl = '';
+          const filePath = `receipts/${Date.now()}_${receiptFile.name}`;
+          const { error: uploadError } = await supabase.storage
+            .from("project-backups")
+            .upload(filePath, receiptFile, {
+              cacheControl: "3600",
+              upsert: true,
+            });
+
+          if (uploadError) {
+            throw uploadError;
+          }
+
+          const { data: { publicUrl } } = supabase.storage
+            .from("project-backups")
+            .getPublicUrl(filePath);
+
+          uploadedUrl = publicUrl;
+          toast.success("Receipt image converted to web-friendly PNG format and saved directly!");
+        } catch (supabaseError: any) {
+          console.warn("Supabase Storage upload failed, trying Microsoft Graph API fallback:", supabaseError);
           try {
-            const permission = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/createLink`).post({
-              type: 'view',
-              scope: 'organization'
-          });
-            sharedUrl = permission.link.webUrl;
-        } catch (linkError) {
-             console.error("Error creating sharing link:", linkError);
-             const item = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}`).get();
-             sharedUrl = item.webUrl;
+            const client = await getGraphClient();
+            const folderPath = `PurvaVedic_PettyCash_Receipts/${user.id}`;
+            const encodedFolder = encodeURIComponent('PurvaVedic_PettyCash_Receipts') + '/' + encodeURIComponent(user.id);
+            const encodedFile = encodeURIComponent(receiptFile.name);
+            
+            if (receiptFile.size <= 4 * 1024 * 1024) {
+               await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/content`).put(receiptFile);
+            } else {
+               const uploadSession = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/createUploadSession`).post({
+                 item: {
+                   "@microsoft.graph.conflictBehavior": "replace",
+                   "name": receiptFile.name
+                 }
+               });
+               
+               const uploadUrl = uploadSession.uploadUrl;
+               const maxChunkSize = 320 * 1024 * 10;
+               const size = receiptFile.size;
+               let start = 0;
+               
+               while (start < size) {
+                 const end = Math.min(start + maxChunkSize, size);
+                 const chunk = receiptFile.slice(start, end);
+                 const response = await fetch(uploadUrl, {
+                   method: 'PUT',
+                   headers: { 'Content-Range': `bytes ${start}-${end - 1}/${size}` },
+                   body: chunk
+                 });
+                 if (!response.ok) throw new Error(`Upload failed at chunk ${start}-${end}`);
+                 start = end;
+               }
+            }
+            
+            let sharedUrl = '';
+            try {
+              const permission = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}:/createLink`).post({
+                type: 'view',
+                scope: 'organization'
+              });
+              sharedUrl = permission.link.webUrl;
+            } catch (linkError) {
+               console.error("Error creating sharing link:", linkError);
+               const item = await client.api(`/me/drive/root:/${encodedFolder}/${encodedFile}`).get();
+               sharedUrl = item.webUrl;
+            }
+            uploadedUrl = sharedUrl;
+          } catch (uploadError: any) {
+               console.error("OneDrive upload error", uploadError);
+               toast.error(`Upload failed: ${supabaseError.message || supabaseError || 'Storage Error'}`);
+               setIsSubmitting(false);
+               return;
+          }
         }
-          finalReceiptUrl = sharedUrl;
-      } catch (uploadError) {
-           console.error("Upload error", uploadError);
-           toast.error("Failed to upload receipt to Microsoft OneDrive. Please make sure you are logged in.");
-           setIsSubmitting(false);
-           return;
+        finalReceiptUrl = uploadedUrl;
       }
-    }
 
       if (editingId) {
         const updatePayload: any = {

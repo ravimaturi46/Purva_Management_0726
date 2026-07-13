@@ -4,13 +4,14 @@ import { loginRequest } from '../lib/msalConfig';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
-import { FileIcon, Download, Upload, Loader2, FolderOpen, Image as ImageIcon, FileText, Eye, X } from 'lucide-react';
+import { FileIcon, Download, Upload, Loader2, FolderOpen, Image as ImageIcon, FileText, Eye, X, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../lib/supabase';
 import { useUser } from '../contexts/UserContext';
 import { useFileSettings } from '../contexts/FileSettingsContext';
 import { canDownloadDrawings } from '../types';
 import { uploadToAutodeskCloud } from '../lib/autodesk';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface DrawingsTrackerProps {
   projectId: string;
@@ -33,6 +34,42 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<{name: string, url: string, isMicrosoft?: boolean, originalUrl?: string, originalFileObj?: any} | null>(null);
+  const [fileToDelete, setFileToDelete] = useState<any | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteFile = async () => {
+    if (!fileToDelete) return;
+    setIsDeleting(true);
+    const toastId = toast.loading(`Deleting file "${fileToDelete.name}"...`);
+    try {
+      const { error } = await supabase
+        .from('project_files')
+        .delete()
+        .eq('id', fileToDelete.id);
+
+      if (error) throw error;
+
+      if (user) {
+        await supabase.from("audit_logs").insert({
+          project_id: projectId,
+          user_id: user.id,
+          user_name: user.full_name || user.email || 'System User',
+          action: "File Deleted",
+          details: `Deleted file: ${fileToDelete.name}`,
+          created_at: new Date().toISOString(),
+        });
+      }
+
+      toast.success("File deleted successfully", { id: toastId });
+      if (onFileUploaded) onFileUploaded();
+    } catch (err: any) {
+      console.error("Error deleting file:", err);
+      toast.error(`Failed to delete file: ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsDeleting(false);
+      setFileToDelete(null);
+    }
+  };
 
   const getPreviewUrl = (url: string) => {
     if (url.includes('sharepoint.com') || url.includes('onedrive.live.com')) {
@@ -486,8 +523,23 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
                                         Download
                                       </Button>
                                     ) : (
-                                      <span className="text-xs text-slate-400 dark:text-zinc-500 italic ml-2">Secure File</span>
+                                      <span className="text-xs text-slate-400 dark:text-zinc-500 italic ml-2 mr-1">Secure File</span>
                                     )}
+
+                                    {(() => {
+                                      const canDelete = user?.role === 'admin' || user?.role === 'chief_sthapathy' || file.uploaded_by === user?.id;
+                                      return canDelete ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg ml-1 shrink-0"
+                                          title="Delete File"
+                                          onClick={() => setFileToDelete(file)}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                      ) : null;
+                                    })()}
                                 </>
                             );
                         })()}
@@ -590,6 +642,16 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!fileToDelete}
+        onOpenChange={(open) => !open && setFileToDelete(null)}
+        onConfirm={handleDeleteFile}
+        title="Delete File"
+        description={`Are you sure you want to delete "${fileToDelete?.name}"? This action will remove it from project records permanently.`}
+        confirmText={isDeleting ? "Deleting..." : "Delete"}
+        variant="destructive"
+      />
     </div>
   );
 };

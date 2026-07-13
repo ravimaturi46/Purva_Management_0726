@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { toast } from 'sonner';
 import { Loader2, Plus, Info, Trash2 } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export const SalaryManagement: React.FC = () => {
   const { user } = useUser();
@@ -15,6 +16,8 @@ export const SalaryManagement: React.FC = () => {
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [salaries, setSalaries] = useState<EmployeeSalary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [salaryToDelete, setSalaryToDelete] = useState<string | null>(null);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   
   const [formData, setFormData] = useState({
     monthly_salary: '',
@@ -113,8 +116,9 @@ export const SalaryManagement: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this salary record?")) return;
+  const handleDelete = async () => {
+    if (!salaryToDelete) return;
+    const id = salaryToDelete;
     try {
       const { error } = await supabase.from('employee_salaries').delete().eq('id', id);
       if (error) throw error;
@@ -122,7 +126,14 @@ export const SalaryManagement: React.FC = () => {
       fetchSalaries(selectedUserId);
     } catch (err: any) {
       toast.error('Failed to delete salary record');
+    } finally {
+      setSalaryToDelete(null);
     }
+  };
+
+  const triggerDelete = (id: string) => {
+    setSalaryToDelete(id);
+    setIsDeleteConfirmOpen(true);
   };
 
   if (loading) {
@@ -229,7 +240,7 @@ export const SalaryManagement: React.FC = () => {
                             <Button 
                               variant="ghost" 
                               size="icon" 
-                              onClick={() => handleDelete(salary.id)}
+                              onClick={() => triggerDelete(salary.id)}
                               className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -245,6 +256,16 @@ export const SalaryManagement: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={isDeleteConfirmOpen}
+        onOpenChange={setIsDeleteConfirmOpen}
+        onConfirm={handleDelete}
+        title="Delete Salary Record"
+        description="Are you sure you want to delete this salary record? This action cannot be undone."
+        confirmText="Delete"
+        variant="destructive"
+      />
     </div>
   );
 };

@@ -224,11 +224,18 @@ export const exportPettyCashToPrint = async (
             const dataUrl = `data:${mimeType};base64,${base64String}`;
             htmlContent += `<img src="${dataUrl}" alt="Receipt image" />`;
           } else {
-            htmlContent += `<div class="error">[Receipt Image Unavailable]</div>`;
+            // Smart Browser Fallback: Let the browser try to render the original URL directly (e.g. using cookie-based Office 365 / Supabase session)
+            htmlContent += `
+              <img src="${entry.receipt_url}" alt="Receipt image" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+              <div class="error" style="display:none">[Image failed to load in browser. Note: SharePoint/OneDrive images require being logged into Microsoft Office in this browser session.]</div>
+            `;
           }
         } catch (error) {
           console.error(`Failed to load image for entry ${entry.id}`, error);
-          htmlContent += `<div class="error">(Failed to load receipt image)</div>`;
+          htmlContent += `
+            <img src="${entry.receipt_url}" alt="Receipt image" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+            <div class="error" style="display:none">[Failed to fetch image. If this is a secure SharePoint file, please ensure you are logged into Office 365 in this browser session.]</div>
+          `;
         }
       }
       
