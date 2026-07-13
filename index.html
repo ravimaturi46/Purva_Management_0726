@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#4f46e5" />
+    <meta name="description" content="Purva Vedic Consultancy, Project Management application" />
+    <link rel="icon" type="image/png" href="/icon-512x512.png" />
+    <link rel="apple-touch-icon" href="/icon-512x512.png" />
+    <title>Purva Vedic Consultancy</title>
+    <script>
+      // Prevent polyfills (like whatwg-fetch) from crashing when fetch is read-only
+      const originalFetch = window.fetch;
+      Object.defineProperty(window, 'fetch', {
+        get: () => originalFetch,
+        set: () => {},
+        configurable: true
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
