@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useUser } from './UserContext';
+import { toast } from 'sonner';
 
 export interface Notification {
   id: string;
@@ -16,7 +17,7 @@ interface NotificationContextType {
   unreadCount: number;
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => Promise<void>;
-  addNotification: (title: string, message: string, targetUserId?: string) => Promise<void>;
+  addNotification: (title: string, message: string, targetUserId?: string, metadata?: any) => Promise<void>;
   browserPermission: 'default' | 'granted' | 'denied' | 'unsupported';
   requestBrowserPermission: () => Promise<'default' | 'granted' | 'denied' | 'unsupported'>;
 }
@@ -71,30 +72,77 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const newNotif = payload.new as Notification;
           setNotifications(prev => [newNotif, ...prev]);
 
-          // Trigger browser popup notification
+          // 1. Play professional auditory cue via browser AudioContext
+          try {
+            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+            osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.1); // G5
+            gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.25);
+          } catch (e) {
+            console.debug('Auditory cue blocked or unsupported until first user interaction');
+          }
+
+          const messageParts = (newNotif.message || '').split(' ||METADATA||');
+          const cleanMessage = messageParts[0];
+          let metadata: any = null;
+          if (messageParts.length > 1) {
+            try {
+              metadata = JSON.parse(messageParts[1]);
+            } catch (e) {
+              console.error('Error parsing notification metadata:', e);
+            }
+          }
+
+          // 2. Trigger highly-visible in-app toast fallback (works 100% of the time, even inside sandbox iframes)
+          toast(newNotif.title, {
+            description: cleanMessage,
+            duration: 8000,
+            action: metadata ? {
+              label: 'View',
+              onClick: () => {
+                window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+              }
+            } : undefined,
+          });
+
+          // 3. Trigger native OS/Browser push notification if allowed
           if (typeof window !== 'undefined' && 'Notification' in window) {
             if (Notification.permission === 'granted') {
               try {
+                // Attempt native desktop notification directly first (most reliable for direct tabs)
+                const notification = new Notification(newNotif.title, {
+                  body: cleanMessage,
+                  icon: '/icon-512x512.png',
+                });
+                
+                notification.onclick = () => {
+                  window.focus();
+                  if (metadata) {
+                    window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+                  }
+                };
+              } catch (directErr) {
+                // Fall back to Service Worker notification if standard constructor fails (e.g. some mobile/sandboxed environments)
                 if ('serviceWorker' in navigator) {
-                  navigator.serviceWorker.ready.then((registration) => {
-                    registration.showNotification(newNotif.title, {
-                      body: newNotif.message,
-                      icon: '/icon-512x512.png',
-                    });
-                  }).catch(() => {
-                    new Notification(newNotif.title, {
-                      body: newNotif.message,
-                      icon: '/icon-512x512.png',
-                    });
-                  });
-                } else {
-                  new Notification(newNotif.title, {
-                    body: newNotif.message,
-                    icon: '/icon-512x512.png',
+                  navigator.serviceWorker.getRegistration().then((registration) => {
+                    if (registration && registration.showNotification) {
+                      registration.showNotification(newNotif.title, {
+                        body: cleanMessage,
+                        icon: '/icon-512x512.png',
+                      });
+                    }
+                  }).catch((swErr) => {
+                    console.error('Service worker notification fallback failed:', swErr);
                   });
                 }
-              } catch (e) {
-                console.error('Failed to trigger browser notification:', e);
               }
             }
           }
@@ -187,12 +235,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
-  const addNotification = async (title: string, message: string, targetUserId?: string) => {
+  const addNotification = async (title: string, message: string, targetUserId?: string, metadata?: any) => {
+    const finalMessage = metadata
+      ? `${message} ||METADATA||${JSON.stringify(metadata)}`
+      : message;
+
     if (targetUserId) {
       const { error } = await supabase.from('notifications').insert({
         user_id: targetUserId,
         title,
-        message,
+        message: finalMessage,
         read: false
       });
       if (error) console.error('Error adding notification:', error);
@@ -210,7 +262,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const newNotifications = admins.map(admin => ({
         user_id: admin.id,
         title,
-        message,
+        message: finalMessage,
         read: false
       }));
 

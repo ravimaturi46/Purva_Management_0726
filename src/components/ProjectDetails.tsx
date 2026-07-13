@@ -235,6 +235,7 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
         "Project Update",
         `${user.full_name} ${action} on project "${project.name}"`,
         assignee.id,
+        { type: "project", id: project.id, project_name: project.name }
       );
     }
   };
@@ -273,6 +274,8 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
       await addNotification(
         "Project Updated",
         `Project "${editData.name}" has been updated by ${user?.full_name}.`,
+        undefined,
+        { type: "project", id: project.id, project_name: project.name }
       );
       await notifyAssignee("updated project details");
 
@@ -507,6 +510,7 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
             "Task Assignment Request",
             `${user?.full_name} has requested to work on task "${task.title}" in project "${project.name}".`,
             assignee.id,
+            { type: "project", id: project.id, project_name: project.name }
           );
         }
       }
@@ -679,6 +683,7 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
           "You were tagged",
           `${user.full_name} tagged you in a comment on project "${project.name}"`,
           userId,
+          { type: "project", id: project.id, project_name: project.name }
         );
       }
 

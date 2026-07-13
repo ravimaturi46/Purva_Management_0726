@@ -12,6 +12,7 @@ import { Profile } from './components/Profile';
 import { VendorManagement } from './components/VendorManagement';
 import { PettyCash } from './components/PettyCash';
 import { LeaveManagement } from './components/LeaveManagement';
+import { BankStatements } from './components/BankStatements';
 import { Login } from './components/Login';
 import { UpdatePassword } from './components/UpdatePassword';
 import { FileControls } from './components/FileControls';
@@ -25,6 +26,7 @@ import { cn } from './lib/utils';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { FileSettingsProvider } from './contexts/FileSettingsContext';
 import { msalInstance, loginRequest } from './lib/msalConfig';
+import { supabase } from './lib/supabase';
 
 function MainApp() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -34,6 +36,52 @@ function MainApp() {
   const [projectDetailsTab, setProjectDetailsTab] = useState('activity');
 
   const { user, loading, recoveryMode } = useUser();
+
+  const handleProjectClick = (project: Project, tab?: string) => {
+    setSelectedProject(project);
+    setProjectDetailsTab(tab || 'activity');
+    setIsDetailsOpen(true);
+    setIsMaximized(false);
+  };
+
+  // Handle interactive notification click events globally
+  useEffect(() => {
+    const handleNotificationClick = async (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const parsed = customEvent.detail;
+      if (!parsed || !parsed.metadata) return;
+
+      const { type, id } = parsed.metadata;
+      if (type === 'project' && id) {
+        try {
+          const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+          if (data && !error) {
+            handleProjectClick(data as Project);
+          } else {
+            // Fallback to project tab
+            setActiveTab('projects');
+          }
+        } catch (err) {
+          console.error('Error loading project from notification click:', err);
+          setActiveTab('projects');
+        }
+      } else if (type === 'leave') {
+        setActiveTab('leaves');
+      } else if (type === 'petty_cash') {
+        setActiveTab('petty_cash');
+      }
+    };
+
+    window.addEventListener('app-notification-click', handleNotificationClick);
+    return () => {
+      window.removeEventListener('app-notification-click', handleNotificationClick);
+    };
+  }, []);
 
   // Handle the special popup redirect flow
   useEffect(() => {
@@ -123,13 +171,6 @@ function MainApp() {
     return <Login />;
   }
 
-  const handleProjectClick = (project: Project, tab?: string) => {
-    setSelectedProject(project);
-    setProjectDetailsTab(tab || 'activity');
-    setIsDetailsOpen(true);
-    setIsMaximized(false);
-  };
-
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -150,6 +191,8 @@ function MainApp() {
         return <VendorManagement onProjectClick={handleProjectClick} />;
       case 'petty_cash':
         return <PettyCash />;
+      case 'bank_statements':
+        return <BankStatements />;
       case 'leaves':
         return <LeaveManagement />;
       case 'file_controls':

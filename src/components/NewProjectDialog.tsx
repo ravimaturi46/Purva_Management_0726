@@ -96,7 +96,12 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({ open, onOpen
 
       if (projectError) throw projectError;
 
-      await addNotification('New Project Created', `Project "${formData.name}" has been created by ${user?.full_name || 'an employee'}.`);
+      await addNotification(
+        'New Project Created',
+        `Project "${formData.name}" has been created by ${user?.full_name || 'an employee'}.`,
+        undefined,
+        { type: 'project', id: projectData.id, project_name: projectData.name }
+      );
       
       // Notify assignee
       if (formData.assigned_to && formData.assigned_to !== 'Unassigned' && user && formData.assigned_to !== user.full_name) {
@@ -105,7 +110,8 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({ open, onOpen
           await addNotification(
             'New Project Assigned',
             `${user.full_name} assigned you to a new project: "${formData.name}"`,
-            assignee.id
+            assignee.id,
+            { type: 'project', id: projectData.id, project_name: projectData.name }
           );
         }
       }

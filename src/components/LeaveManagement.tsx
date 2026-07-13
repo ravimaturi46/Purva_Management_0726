@@ -300,13 +300,16 @@ export const LeaveManagement: React.FC = () => {
             await addNotification(
               "New Leave Request",
               `${user?.full_name || 'Staff Member'} has requested ${getLeaveDays(insertedLeave)} day(s) of ${leaveType} leave starting ${startDate}.`,
-              s.id
+              s.id,
+              { type: 'leave', id: insertedLeave.id }
             );
           }
         } else {
           await addNotification(
             "New Leave Request",
-            `${user?.full_name || 'Staff Member'} has requested ${getLeaveDays(insertedLeave)} day(s) of ${leaveType} leave starting ${startDate}.`
+            `${user?.full_name || 'Staff Member'} has requested ${getLeaveDays(insertedLeave)} day(s) of ${leaveType} leave starting ${startDate}.`,
+            undefined,
+            { type: 'leave', id: insertedLeave.id }
           );
         }
       } catch (notifErr) {
@@ -332,7 +335,9 @@ export const LeaveManagement: React.FC = () => {
       try {
         await addNotification(
           "New Leave Request (Offline)",
-          `${user?.full_name || 'Staff Member'} has requested ${getLeaveDays(newLeave)} day(s) of ${leaveType} leave.`
+          `${user?.full_name || 'Staff Member'} has requested ${getLeaveDays(newLeave)} day(s) of ${leaveType} leave.`,
+          undefined,
+          { type: 'leave', id: newLeave.id }
         );
       } catch (notifErr) {
         console.warn("Could not send offline leave notification:", notifErr);
@@ -384,7 +389,8 @@ export const LeaveManagement: React.FC = () => {
           await addNotification(
             `Leave Request ${newStatus}`,
             `Your leave request for ${targetLeave.leave_type} Leave starting ${format(parseISO(targetLeave.start_date), 'MMM d, yyyy')} has been ${newStatus.toLowerCase()} by ${approvedBy}.`,
-            targetLeave.user_id
+            targetLeave.user_id,
+            { type: 'leave', id: targetLeave.id }
           );
         } catch (notifErr) {
           console.warn("Could not send leave status update notification:", notifErr);
@@ -406,7 +412,8 @@ export const LeaveManagement: React.FC = () => {
           await addNotification(
             `Leave Request ${newStatus}`,
             `Your leave request for ${targetLeave.leave_type} Leave starting ${format(parseISO(targetLeave.start_date), 'MMM d, yyyy')} has been ${newStatus.toLowerCase()} by ${approvedBy}.`,
-            targetLeave.user_id
+            targetLeave.user_id,
+            { type: 'leave', id: targetLeave.id }
           );
         } catch (notifErr) {
           console.warn("Could not send offline leave status update notification:", notifErr);

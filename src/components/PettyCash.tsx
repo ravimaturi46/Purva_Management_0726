@@ -785,7 +785,23 @@ export function PettyCash() {
         const notificationTitle = `Updated Petty Cash Entry: ${data[0].bill_name || data[0].category}`;
         const notificationMessage = `Project: ${data[0].project_name || 'N/A'} | ${amtStr} | Reason: ${data[0].reason || 'N/A'} | Paid By: ${data[0].raised_by_name || 'N/A'}`;
         
-        await addNotification(notificationTitle, notificationMessage);
+        await addNotification(
+          notificationTitle,
+          notificationMessage,
+          undefined,
+          {
+            type: 'petty_cash',
+            id: data[0].id,
+            project_name: data[0].project_name || 'N/A',
+            category: data[0].category,
+            bill_name: data[0].bill_name || 'N/A',
+            reason: data[0].reason || 'N/A',
+            amount: amtStr,
+            raised_by_name: data[0].raised_by_name || 'N/A',
+            receipt_url: data[0].receipt_url || null,
+            date: data[0].date
+          }
+        );
 
         setEditingId(null);
         setShowForm(false);
@@ -836,7 +852,23 @@ export function PettyCash() {
           const notificationTitle = `New Petty Cash Entry: ${data[0].bill_name || data[0].category}`;
           const notificationMessage = `Project: ${data[0].project_name || 'N/A'} | ${amtStr} | Reason: ${data[0].reason || 'N/A'} | Paid By: ${data[0].raised_by_name || 'N/A'}`;
           
-          await addNotification(notificationTitle, notificationMessage);
+          await addNotification(
+            notificationTitle,
+            notificationMessage,
+            undefined,
+            {
+              type: 'petty_cash',
+              id: data[0].id,
+              project_name: data[0].project_name || 'N/A',
+              category: data[0].category,
+              bill_name: data[0].bill_name || 'N/A',
+              reason: data[0].reason || 'N/A',
+              amount: amtStr,
+              raised_by_name: data[0].raised_by_name || 'N/A',
+              receipt_url: data[0].receipt_url || null,
+              date: data[0].date
+            }
+          );
       }
 
         if (addAnother) {
@@ -1230,30 +1262,7 @@ export function PettyCash() {
                 )}
               </div>
 
-              {/* Manual URL / Embed Code input */}
-              <div className="mt-3">
-                <label className="text-xs font-medium text-slate-500 dark:text-zinc-400 block mb-1">
-                  Or paste Receipt Link / IFrame Embed Code manually
-                </label>
-                <input 
-                  type="text"
-                  value={existingReceiptUrl || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val.trim().startsWith('<iframe') && val.includes('src=')) {
-                      const match = val.match(/src="([^"]+)"/);
-                      if (match && match[1]) {
-                        setExistingReceiptUrl(match[1]);
-                        toast.success("Extracted URL from iframe embed code!");
-                        return;
-                      }
-                    }
-                    setExistingReceiptUrl(val || null);
-                  }}
-                  placeholder="https://purvavedic-my.sharepoint.com/:u:/p/... or <iframe src='...'></iframe>"
-                  className="w-full px-3 py-1.5 text-xs border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 dark:text-white"
-                />
-              </div>
+              {/* Manual URL / Embed Code input hidden */}
             </div>
             
             <div className="pt-4 flex flex-col sm:flex-row sm:justify-end gap-3 border-t border-slate-100 dark:border-white/5 mt-6">
