@@ -550,10 +550,6 @@ export const LeaveManagement: React.FC = () => {
                 Approver Control Panel
               </span>
             </div>
-            <h3 className="text-xl font-extrabold tracking-tight">Namaste, Chief Sthapathy</h3>
-            <p className="text-xs text-indigo-100 max-w-xl leading-relaxed">
-              As the Chief Sthapathy, you are responsible for reviewing and approving leave requests. No leave quotas apply to your account. Your decisions help maintain efficient carving schedules and direct temple site construction smoothly.
-            </p>
           </div>
           <div className="flex gap-4">
             <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-white/10 text-center min-w-28">
@@ -623,8 +619,7 @@ export const LeaveManagement: React.FC = () => {
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Guideline Policy</h4>
             </div>
             <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
-              In our organisation, each staff member is allocated <strong className="text-slate-700 dark:text-zinc-200">12 Sick</strong> and <strong className="text-slate-700 dark:text-zinc-200">12 Casual</strong> leaves per year.
-              Kindly apply at least 3 days in advance for casual leave. Chief Sthapathy reviews applications to manage site carving schedules.
+              Kindly apply at least 3 days in advance so that the Chief Sthapathy can plan his schedule.
             </p>
             <div className="mt-3 flex items-center justify-between border-t border-slate-200/50 dark:border-white/5 pt-2">
               <span className="text-xs font-bold text-slate-400">My Pending requests:</span>
@@ -636,73 +631,7 @@ export const LeaveManagement: React.FC = () => {
         </div>
       )}
 
-      {/* Database Warning Banner (Only show SQL instructions if it's falling back or to help user sync) */}
-      <div className="bg-amber-50/50 dark:bg-amber-505/10 rounded-2xl p-4 border border-amber-200/50 dark:border-amber-500/20 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-3 shadow-sm">
-        <Sparkles className="w-4.5 h-4.5 text-amber-500 shrink-0 mt-0.5" />
-        <div className="space-y-1 flex-1">
-          <p className="font-bold">Database Setup Notice for Administrators</p>
-          <p className="opacity-90">
-            Leave records are fully saved in this browser's secure cache for local prototyping. To enable team-wide cloud database sync across different devices, copy and paste the SQL script into your Supabase SQL Editor.
-          </p>
-          <details className="mt-2 text-slate-600 dark:text-zinc-400 cursor-pointer">
-            <summary className="font-bold hover:underline text-amber-600 dark:text-amber-400 select-none">Show Postgres SQL Schema & Migration Code</summary>
-            <div className="mt-2 space-y-4">
-              <div>
-                <p className="font-bold text-[11px] mb-1 text-slate-700 dark:text-zinc-300">OPTION A: Run this to update your existing table (MIGRATION):</p>
-                <pre className="p-3 bg-slate-900 text-slate-100 font-mono text-[10px] rounded-xl overflow-x-auto select-all max-h-48 whitespace-pre-wrap leading-normal">
-{`-- Add columns for half-day & hourly leaves to your existing table
-ALTER TABLE public.leaves ADD COLUMN IF NOT EXISTS duration_type TEXT DEFAULT 'full';
-ALTER TABLE public.leaves ADD COLUMN IF NOT EXISTS half_day_period TEXT;
-ALTER TABLE public.leaves ADD COLUMN IF NOT EXISTS hourly_hours INTEGER;
 
--- Enable deletion access if you haven't already (idempotent)
-DROP POLICY IF EXISTS "Enable delete access for all users" ON public.leaves;
-CREATE POLICY "Enable delete access for all users" ON public.leaves FOR DELETE USING (true);`}
-                </pre>
-              </div>
-
-              <div>
-                <p className="font-bold text-[11px] mb-1 text-slate-700 dark:text-zinc-300">OPTION B: Run this for a completely fresh table setup:</p>
-                <pre className="p-3 bg-slate-900 text-slate-100 font-mono text-[10px] rounded-xl overflow-x-auto select-all max-h-48 whitespace-pre-wrap leading-normal">
-{`DROP TABLE IF EXISTS public.leaves;
-
-CREATE TABLE public.leaves (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  employee_name TEXT NOT NULL,
-  employee_email TEXT NOT NULL,
-  leave_type TEXT NOT NULL CHECK (leave_type IN ('Sick', 'Casual')),
-  start_date DATE NOT NULL,
-  end_date DATE NOT NULL,
-  duration_type TEXT DEFAULT 'full' CHECK (duration_type IN ('full', 'half', 'hourly')),
-  half_day_period TEXT CHECK (half_day_period IN ('morning', 'afternoon')),
-  hourly_hours INTEGER,
-  reason TEXT,
-  status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Approved', 'Rejected')),
-  approved_by TEXT,
-  approved_at TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
-);
-
-ALTER TABLE public.leaves ENABLE ROW LEVEL SECURITY;
-
--- Drop any existing policies to avoid conflicts
-DROP POLICY IF EXISTS "Enable read access for all users" ON public.leaves;
-DROP POLICY IF EXISTS "Enable insert access for authenticated users" ON public.leaves;
-DROP POLICY IF EXISTS "Enable update access for admins and chief sthapathy" ON public.leaves;
-DROP POLICY IF EXISTS "Enable delete access for all users" ON public.leaves;
-
--- Create policies
-CREATE POLICY "Enable read access for all users" ON public.leaves FOR SELECT USING (true);
-CREATE POLICY "Enable insert access for authenticated users" ON public.leaves FOR INSERT WITH CHECK (true);
-CREATE POLICY "Enable update access for admins and chief sthapathy" ON public.leaves FOR UPDATE USING (true);
-CREATE POLICY "Enable delete access for all users" ON public.leaves FOR DELETE USING (true);`}
-                </pre>
-              </div>
-            </div>
-          </details>
-        </div>
-      </div>
 
       {/* Tabs */}
       <div className="border-b border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-4">
