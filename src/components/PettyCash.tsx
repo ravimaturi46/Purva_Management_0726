@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useMsal } from '@azure/msal-react';
-import { loginRequest, msalConfig } from '../lib/msalConfig';
+import { loginRequest, msalConfig, getFreshGraphToken, hasActiveMsalAccount } from '../lib/msalConfig';
+import { getStoredMsalToken, saveMsalSession, getStoredMsalAccount, getGraphAccessToken } from '../lib/msalHelper';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { Client, ResponseType } from '@microsoft/microsoft-graph-client';
 import { supabase } from '../lib/supabase';
@@ -53,8 +54,72 @@ export function PettyCash() {
   const canCreate = canManagePettyCash(user?.role, 'create');
 
   const { instance, accounts, inProgress } = useMsal();
-  const [msalReady, setMsalReady] = useState(() => instance.getAllAccounts().length > 0);
+
+  const getMSALAccountFromStorage = useCallback(() => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.includes('-account-') || key.includes('.accounts.'))) {
+        try {
+          const item = localStorage.getItem(key);
+          if (item) {
+            const parsed = JSON.parse(item);
+            if (parsed && parsed.homeAccountId && parsed.username) {
+              return {
+                homeAccountId: parsed.homeAccountId,
+                environment: parsed.environment || 'login.microsoftonline.com',
+                tenantId: parsed.realm || '',
+                username: parsed.username,
+                localAccountId: parsed.localAccountId || parsed.homeAccountId,
+                name: parsed.name || parsed.username.split('@')[0],
+              };
+            }
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+    }
+    return null;
+  }, []);
+
+  const [msalReady, setMsalReady] = useState(() => {
+    if (instance.getAllAccounts().length > 0) return true;
+    if (getStoredMsalToken()) return true;
+    if (getStoredMsalAccount()) return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.includes('-account-') || key.includes('.accounts.'))) {
+        try {
+          const item = localStorage.getItem(key);
+          if (item) {
+            const parsed = JSON.parse(item);
+            if (parsed && parsed.homeAccountId) return true;
+          }
+        } catch (e) {}
+      }
+    }
+    return false;
+  });
   
+  useEffect(() => {
+    const allAccounts = instance.getAllAccounts();
+    const hasAccounts = allAccounts.length > 0 || accounts.length > 0;
+    if (hasAccounts) {
+      if (!instance.getActiveAccount()) {
+        const active = allAccounts[0] || accounts[0];
+        if (active) {
+          instance.setActiveAccount(active);
+        }
+      }
+      setMsalReady(true);
+    } else {
+      const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+      if (stored) {
+        instance.setActiveAccount(stored as any);
+        setMsalReady(true);
+      }
+    }
+  }, [accounts, instance, getMSALAccountFromStorage]);
   
   const customInteractiveLogin = async () => {
     return new Promise<void>((resolve, reject) => {
@@ -74,9 +139,16 @@ export function PettyCash() {
       }).catch(e => {
         if (!isDone) {
           if (e.message && e.message.includes('timed_out')) {
-            const accounts = instance.getAllAccounts();
-            if (accounts.length > 0) {
-               instance.setActiveAccount(accounts[0]);
+            const allAccounts = instance.getAllAccounts();
+            if (allAccounts.length > 0) {
+               instance.setActiveAccount(allAccounts[0]);
+               isDone = true;
+               resolve();
+               return;
+            }
+            const stored = getMSALAccountFromStorage();
+            if (stored) {
+               instance.setActiveAccount(stored);
                isDone = true;
                resolve();
                return;
@@ -100,93 +172,61 @@ export function PettyCash() {
           clearInterval(interval);
           return;
         }
-        const accounts = instance.getAllAccounts();
-        if (accounts.length > 0) {
+        const allAccounts = instance.getAllAccounts();
+        if (allAccounts.length > 0) {
           isDone = true;
           clearInterval(interval);
-          instance.setActiveAccount(accounts[0]);
+          instance.setActiveAccount(allAccounts[0]);
           resolve();
+        } else {
+          const stored = getMSALAccountFromStorage();
+          if (stored) {
+            isDone = true;
+            clearInterval(interval);
+            instance.setActiveAccount(stored);
+            resolve();
+          }
         }
       }, 1000);
     });
   };
 
   const getGraphToken = useCallback(async (interactive = false) => {
-    let activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
-    if (!activeAccount && interactive) {
-      await customInteractiveLogin();
-      activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
-    }
-    if (!activeAccount) {
-      throw new Error("Not logged into Microsoft. Please authenticate.");
-    }
-    
     try {
-      const response = await instance.acquireTokenSilent({
-        ...loginRequest,
-        account: activeAccount
-      });
-      return response.accessToken;
+      return await getGraphAccessToken(instance);
     } catch (e: any) {
-      console.warn("Silent token acquisition failed:", e);
+      console.warn("msalHelper getGraphAccessToken failed:", e);
       if (interactive) {
-         return new Promise<string>((resolve, reject) => {
-            let isDone = false;
-            
-            instance.acquireTokenPopup({
-                ...loginRequest,
-                account: activeAccount
-            }).then(popupResponse => {
-                if (!isDone) {
-                    isDone = true;
-                    resolve(popupResponse.accessToken);
-                }
-            }).catch(popupErr => {
-                if (!isDone) {
-                    if (popupErr.message && popupErr.message.includes('timed_out')) {
-                       // Handled by polling
-                    } else {
-                       isDone = true;
-                       console.warn("Popup token acquisition failed:", popupErr);
-                       toast.error("Microsoft Auth failed: " + popupErr.message);
-                       reject(popupErr);
-                    }
-                }
-            });
-            
-            // Poll for silent token success
-            const interval = setInterval(async () => {
-                if (isDone) {
-                    clearInterval(interval);
-                    return;
-                }
-                try {
-                    const response = await instance.acquireTokenSilent({
-                        ...loginRequest,
-                        account: activeAccount
-                    });
-                    isDone = true;
-                    clearInterval(interval);
-                    resolve(response.accessToken);
-                } catch (silentErr) {
-                    // Ignore and keep polling
-                }
-            }, 1500);
-         });
+        await customInteractiveLogin();
+        return await getGraphAccessToken(instance);
       } else {
-         throw e;
+        throw e;
       }
     }
-  }, [instance]);
+  }, [instance, customInteractiveLogin]);
 
   const getGraphClient = useCallback(async (interactive = false) => {
-    const token = await getGraphToken(interactive);
-    return Client.init({
-      authProvider: (done) => {
-        done(null, token);
+    try {
+      const token = await getFreshGraphToken();
+      return Client.init({
+        authProvider: (done) => {
+          done(null, token);
+        }
+      });
+    } catch (e: any) {
+      console.warn("Silent fresh token acquisition failed:", e);
+      try {
+        const token = await getGraphToken(interactive);
+        return Client.init({
+          authProvider: (done) => {
+            done(null, token);
+          }
+        });
+      } catch (innerError) {
+        throw innerError;
+      }
     }
-  });
-}, [getGraphToken]);
+  }, [getGraphToken]);
 
   const [entries, setEntries] = useState<PettyCashEntry[]>([]);
   const [projects, setProjects] = useState<{id: string, name: string}[]>([]);
@@ -234,18 +274,22 @@ export function PettyCash() {
       const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
       if (activeAccount) {
         instance.logoutPopup({ account: activeAccount }).then(() => {
+          setMsalReady(false);
           toast.success("Logged out of Microsoft.");
         }).catch(() => {
           instance.clearCache();
+          setMsalReady(false);
           window.location.reload();
         });
       } else {
         instance.clearCache();
+        setMsalReady(false);
         toast.success("Microsoft Auth Cache cleared.");
       }
     } catch (e) {
       localStorage.clear();
       sessionStorage.clear();
+      setMsalReady(false);
       window.location.reload();
     }
   };
@@ -549,48 +593,76 @@ export function PettyCash() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // If not an image (e.g. PDF or document), skip compression and keep original file
+    if (!file.type.startsWith('image/')) {
+      setReceiptFile(file);
+      setIsCompressing(false);
+      return;
+    }
+
     setIsCompressing(true);
     
     const reader = new FileReader();
-    reader.readAsDataURL(file);
+    reader.onerror = () => {
+      console.error("FileReader error reading receipt");
+      toast.error("Failed to read receipt file. Using original file.");
+      setReceiptFile(file);
+      setIsCompressing(false);
+    };
     reader.onload = (event) => {
       const img = new Image();
-      img.src = event.target?.result as string;
+      img.onerror = () => {
+        console.error("Image load error for compression");
+        toast.error("Could not process image compression. Using original file.");
+        setReceiptFile(file);
+        setIsCompressing(false);
+      };
       img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        
-        const MAX_WIDTH = 1200;
-        const MAX_HEIGHT = 1200;
-        
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-        }
-      } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-        }
-      }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const webpngFile = new File([blob], `${Date.now()}_receipt.png`, { type: 'image/png' });
-            setReceiptFile(webpngFile);
-        }
+        try {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          const MAX_WIDTH = 1200;
+          const MAX_HEIGHT = 1200;
+          
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const compressedFile = new File([blob], `${Date.now()}_receipt.webp`, { type: 'image/webp' });
+              setReceiptFile(compressedFile);
+            } else {
+              setReceiptFile(file);
+            }
+            setIsCompressing(false);
+          }, 'image/webp', 0.85);
+        } catch (err) {
+          console.error("Compression exception:", err);
+          setReceiptFile(file);
           setIsCompressing(false);
-      }, 'image/png');
+        }
+      };
+      img.src = event.target?.result as string;
     };
+    reader.readAsDataURL(file);
   };
-};
 
   const fetchQueries = async () => {
     setIsLoading(true);
@@ -686,11 +758,12 @@ export function PettyCash() {
             .getPublicUrl(filePath);
 
           uploadedUrl = publicUrl;
-          toast.success("Receipt image converted to web-friendly PNG format and saved directly!");
+          toast.success("Receipt image converted to web-optimized WebP (WebPNG) format and saved directly!");
         } catch (supabaseError: any) {
           console.warn("Supabase Storage upload failed, trying Microsoft Graph API fallback:", supabaseError);
           try {
-            const client = await getGraphClient();
+            // Use interactive = false so we NEVER trigger popup block during submission
+            const client = await getGraphClient(false);
             const folderPath = `PurvaVedic_PettyCash_Receipts/${user.id}`;
             const encodedFolder = encodeURIComponent('PurvaVedic_PettyCash_Receipts') + '/' + encodeURIComponent(user.id);
             const encodedFile = encodeURIComponent(receiptFile.name);
@@ -738,7 +811,8 @@ export function PettyCash() {
             uploadedUrl = sharedUrl;
           } catch (uploadError: any) {
                console.error("OneDrive upload error", uploadError);
-               toast.error(`Upload failed: ${supabaseError.message || supabaseError || 'Storage Error'}`);
+               // Correctly report the Microsoft Graph API/OneDrive upload error instead of the Supabase error
+               toast.error(`Upload failed: ${uploadError.message || uploadError || 'Storage Error'}`);
                setIsSubmitting(false);
                return;
           }
@@ -1198,12 +1272,38 @@ export function PettyCash() {
                       window.open(`${window.location.origin}?auth_action=login`, 'oauth_popup', `width=${width},height=${height},left=${left},top=${top}`);
                       
                       const receiveMessage = async (event: MessageEvent) => {
-                        if (typeof event.data === 'string' && event.data === 'msal_login_success') {
+                        const data = event.data;
+                        const isSuccess = data === 'msal_login_success' || (data && data.type === 'msal_login_success');
+                        if (isSuccess) {
                           window.removeEventListener('message', receiveMessage);
+                          clearInterval(pollInterval);
+                          
+                          if (data && data.type === 'msal_login_success' && data.token) {
+                            saveMsalSession(data.account, data.token, data.expiresOn);
+                            if (data.account) {
+                              instance.setActiveAccount(data.account);
+                            }
+                          } else {
+                            try {
+                              const pca = new PublicClientApplication(msalConfig);
+                              await pca.initialize();
+                              const allAccounts = pca.getAllAccounts();
+                              if (allAccounts.length > 0) {
+                                instance.setActiveAccount(allAccounts[0]);
+                              } else {
+                                const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+                                if (stored) {
+                                  instance.setActiveAccount(stored as any);
+                                }
+                              }
+                            } catch (err) {
+                              console.warn("Error initializing fresh MSAL in popup message handler:", err);
+                            }
+                          }
                           setMsalReady(true);
                           toast.success("Successfully logged in to Microsoft");
-                      }
-                    };
+                        }
+                      };
                       window.addEventListener('message', receiveMessage);
                       
                       // Fallback interval just in case postMessage fails
@@ -1213,18 +1313,45 @@ export function PettyCash() {
                         if (attempts > 180) { // Stop after 3 mins
                           clearInterval(pollInterval);
                           return;
-                      }
+                        }
 
                         try {
-                          if (instance.getAllAccounts().length > 0) {
+                          const validToken = getStoredMsalToken();
+                          if (validToken) {
                             clearInterval(pollInterval);
                             window.removeEventListener('message', receiveMessage);
+                            const storedAcc = getStoredMsalAccount();
+                            if (storedAcc) {
+                              instance.setActiveAccount(storedAcc as any);
+                            }
                             setMsalReady(true);
-                        }
-                      } catch (err) {
+                            toast.success("Successfully logged in to Microsoft");
+                            return;
+                          }
+
+                          const pca = new PublicClientApplication(msalConfig);
+                          await pca.initialize();
+                          const allAccounts = pca.getAllAccounts();
+                          if (allAccounts.length > 0) {
+                            clearInterval(pollInterval);
+                            window.removeEventListener('message', receiveMessage);
+                            instance.setActiveAccount(allAccounts[0]);
+                            setMsalReady(true);
+                            toast.success("Successfully logged in to Microsoft");
+                          } else {
+                            const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+                            if (stored) {
+                              clearInterval(pollInterval);
+                              window.removeEventListener('message', receiveMessage);
+                              instance.setActiveAccount(stored as any);
+                              setMsalReady(true);
+                              toast.success("Successfully logged in to Microsoft");
+                            }
+                          }
+                        } catch (err) {
                           // Just ignore errors during polling
-                      }
-                    }, 1500);
+                        }
+                      }, 1500);
                   }}
                     className="border-[#0078D4] text-[#0078D4] hover:bg-[#0078D4]/5 dark:border-[#0078D4] dark:hover:bg-[#0078D4]/20"
                   >

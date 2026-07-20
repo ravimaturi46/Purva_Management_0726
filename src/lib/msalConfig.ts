@@ -17,3 +17,44 @@ export const loginRequest = {
 };
 
 export const msalInstance = new PublicClientApplication(msalConfig);
+
+/**
+ * Creates a fresh PublicClientApplication instance to bypass stale in-memory cache
+ * and force reloading accounts from localStorage (which is updated by the popup).
+ */
+export async function getFreshGraphToken(): Promise<string> {
+  const pca = new PublicClientApplication(msalConfig);
+  await pca.initialize();
+  
+  const accounts = pca.getAllAccounts();
+  if (accounts.length === 0) {
+    throw new Error("No Microsoft accounts found in cache. Please authenticate.");
+  }
+  
+  const activeAccount = pca.getActiveAccount() || accounts[0];
+  if (!activeAccount) {
+    throw new Error("No active Microsoft account found.");
+  }
+  
+  // Call acquireTokenSilent on the fresh instance with loaded localStorage cache
+  const response = await pca.acquireTokenSilent({
+    ...loginRequest,
+    account: activeAccount
+  });
+  
+  return response.accessToken;
+}
+
+/**
+ * Checks if there is an active MSAL account by initializing a fresh instance
+ */
+export async function hasActiveMsalAccount(): Promise<boolean> {
+  try {
+    const pca = new PublicClientApplication(msalConfig);
+    await pca.initialize();
+    return pca.getAllAccounts().length > 0;
+  } catch (e) {
+    return false;
+  }
+}
+

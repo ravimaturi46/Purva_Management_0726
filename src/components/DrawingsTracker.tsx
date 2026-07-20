@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
-import { loginRequest } from '../lib/msalConfig';
+import { loginRequest, getFreshGraphToken, hasActiveMsalAccount, msalConfig } from '../lib/msalConfig';
+import { getGraphClientInstance } from '../lib/msalHelper';
+import { PublicClientApplication } from '@azure/msal-browser';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
@@ -79,19 +81,7 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
   };
 
   const getGraphClient = useCallback(async () => {
-    const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
-    if (!activeAccount) throw new Error("No accounts found");
-    
-    const response = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account: activeAccount
-    });
-
-    return Client.init({
-      authProvider: (done) => {
-        done(null, response.accessToken);
-      }
-    });
+    return await getGraphClientInstance(instance);
   }, [instance]);
 
   const handleViewFile = async (file: any) => {
@@ -204,6 +194,17 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
     const receiveMessage = async (event: MessageEvent) => {
       if (typeof event.data === 'string' && event.data === 'msal_login_success') {
         window.removeEventListener('message', receiveMessage);
+        clearInterval(pollInterval);
+        try {
+          const pca = new PublicClientApplication(msalConfig);
+          await pca.initialize();
+          const allAccounts = pca.getAllAccounts();
+          if (allAccounts.length > 0) {
+            instance.setActiveAccount(allAccounts[0]);
+          }
+        } catch (err) {
+          console.warn("Error initializing fresh MSAL in DrawingsTracker message handler:", err);
+        }
         setMsalReady(true);
         toast.success("Successfully logged in to Microsoft");
       }
@@ -220,10 +221,14 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
       }
 
       try {
-        if (instance.getAllAccounts().length > 0) {
+        const pca = new PublicClientApplication(msalConfig);
+        await pca.initialize();
+        if (pca.getAllAccounts().length > 0) {
           clearInterval(pollInterval);
           window.removeEventListener('message', receiveMessage);
+          instance.setActiveAccount(pca.getAllAccounts()[0]);
           setMsalReady(true);
+          toast.success("Successfully logged in to Microsoft");
         }
       } catch (err) {
         // Just ignore errors during polling

@@ -88,9 +88,29 @@ function MainApp() {
     if (window.location.search.includes('auth_action=login')) {
       if (msalInstance.getAllAccounts().length > 0) {
         // We already have an account logged in! Close the popup.
-        if (window.opener && window.opener !== window) {
-          window.close();
-        }
+        const account = msalInstance.getAllAccounts()[0];
+        msalInstance.acquireTokenSilent({
+          ...loginRequest,
+          account: account
+        }).then(response => {
+          if (window.opener && window.opener !== window) {
+            window.opener.postMessage({
+              type: 'msal_login_success',
+              account: account,
+              token: response.accessToken,
+              expiresOn: response.expiresOn ? response.expiresOn.getTime() : null
+            }, '*');
+            window.close();
+          }
+        }).catch(() => {
+          if (window.opener && window.opener !== window) {
+            window.opener.postMessage({
+              type: 'msal_login_success',
+              account: account
+            }, '*');
+            window.close();
+          }
+        });
       } else {
         // Set this session storage flag so when MSAL redirects back, we know this tab is just a popup
         sessionStorage.setItem('is_msal_popup', 'true');
@@ -105,7 +125,7 @@ function MainApp() {
 
   const isOAuthCallback = window.location.search.includes('code=') || window.location.hash.includes('code=');
   const isAuthAction = window.location.search.includes('auth_action=login');
-  const isPopupAuth = (window.opener && window.opener !== window) || sessionStorage.getItem('is_msal_popup') === 'true' || isOAuthCallback || isAuthAction;
+  const isPopupAuth = sessionStorage.getItem('is_msal_popup') === 'true' || isOAuthCallback || isAuthAction;
 
   useEffect(() => {
     if (isPopupAuth) {
@@ -113,19 +133,39 @@ function MainApp() {
         if (msalInstance.getAllAccounts().length > 0) {
           clearInterval(checkInterval);
           sessionStorage.removeItem('is_msal_popup');
-          if (window.opener && window.opener !== window) {
-            window.opener.postMessage('msal_login_success', window.location.origin);
-          }
-          window.close();
+          const account = msalInstance.getAllAccounts()[0];
+          msalInstance.acquireTokenSilent({
+            ...loginRequest,
+            account: account
+          }).then(response => {
+            if (window.opener && window.opener !== window) {
+              window.opener.postMessage({
+                type: 'msal_login_success',
+                account: account,
+                token: response.accessToken,
+                expiresOn: response.expiresOn ? response.expiresOn.getTime() : null
+              }, '*');
+            }
+            window.close();
+          }).catch(err => {
+            console.error("Failed silent token in popup:", err);
+            if (window.opener && window.opener !== window) {
+              window.opener.postMessage({
+                type: 'msal_login_success',
+                account: account
+              }, '*');
+            }
+            window.close();
+          });
         }
       }, 500);
 
-      // Fallback: close after some time to avoid hanging process
+      // Fallback: close after some time to avoid hanging process (5 minutes)
       const timeout = setTimeout(() => {
         clearInterval(checkInterval);
         sessionStorage.removeItem('is_msal_popup');
         window.close();
-      }, 10000);
+      }, 300000);
 
       return () => {
         clearInterval(checkInterval);

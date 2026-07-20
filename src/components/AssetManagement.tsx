@@ -7,7 +7,9 @@ import { Plus, Download, X, Loader2, FileText, Image as ImageIcon, Briefcase, La
 import { toast } from 'sonner';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
-import { loginRequest } from '../lib/msalConfig';
+import { loginRequest, getFreshGraphToken, msalConfig } from '../lib/msalConfig';
+import { getGraphClientInstance } from '../lib/msalHelper';
+import { PublicClientApplication } from '@azure/msal-browser';
 import { Client } from '@microsoft/microsoft-graph-client';
 
 export type AssetType = 'asset' | 'fd' | 'loan';
@@ -112,19 +114,7 @@ export const AssetManagement: React.FC = () => {
   };
 
   const getGraphClient = useCallback(async () => {
-    const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
-    if (!activeAccount) {
-      throw new Error("Not logged into Microsoft. Please authenticate.");
-    }
-    const response = await instance.acquireTokenSilent({
-      ...loginRequest,
-      account: activeAccount
-    });
-    return Client.init({
-      authProvider: (done) => {
-        done(null, response.accessToken);
-      }
-    });
+    return await getGraphClientInstance(instance);
   }, [instance]);
 
   const handleLogin = () => {
@@ -141,6 +131,17 @@ export const AssetManagement: React.FC = () => {
     const receiveMessage = async (event: MessageEvent) => {
       if (typeof event.data === 'string' && event.data === 'msal_login_success') {
         window.removeEventListener('message', receiveMessage);
+        clearInterval(pollInterval);
+        try {
+          const pca = new PublicClientApplication(msalConfig);
+          await pca.initialize();
+          const allAccounts = pca.getAllAccounts();
+          if (allAccounts.length > 0) {
+            instance.setActiveAccount(allAccounts[0]);
+          }
+        } catch (err) {
+          console.warn("Error initializing fresh MSAL in AssetManagement message handler:", err);
+        }
         setMsalReady(true);
         toast.success("Successfully logged in to Microsoft");
       }
@@ -152,10 +153,14 @@ export const AssetManagement: React.FC = () => {
       attempts++;
       if (attempts > 180) { clearInterval(pollInterval); return; }
       try {
-        if (instance.getAllAccounts().length > 0) {
+        const pca = new PublicClientApplication(msalConfig);
+        await pca.initialize();
+        if (pca.getAllAccounts().length > 0) {
           clearInterval(pollInterval);
           window.removeEventListener('message', receiveMessage);
+          instance.setActiveAccount(pca.getAllAccounts()[0]);
           setMsalReady(true);
+          toast.success("Successfully logged in to Microsoft");
         }
       } catch (err) {}
     }, 1500);

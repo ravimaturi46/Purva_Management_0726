@@ -174,6 +174,8 @@ export const GlobalCalendar: React.FC<{ onProjectClick: (p: Project) => void }> 
         events={filteredEvents} 
         onEventClick={handleEventClick} 
         selectedProjectName={selectedProjectName}
+        projects={projects}
+        onTaskCreated={fetchData}
       />
     </div>
   );
