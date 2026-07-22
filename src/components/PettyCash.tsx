@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useMsal } from '@azure/msal-react';
 import { loginRequest, msalConfig, getFreshGraphToken, hasActiveMsalAccount } from '../lib/msalConfig';
-import { getStoredMsalToken, saveMsalSession, getStoredMsalAccount, getGraphAccessToken } from '../lib/msalHelper';
+import { getStoredMsalToken, saveMsalSession, getStoredMsalAccount, getGraphAccessToken, clearMsalSession } from '../lib/msalHelper';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { Client, ResponseType } from '@microsoft/microsoft-graph-client';
 import { supabase } from '../lib/supabase';
@@ -56,6 +56,7 @@ export function PettyCash() {
   const { instance, accounts, inProgress } = useMsal();
 
   const getMSALAccountFromStorage = useCallback(() => {
+    const targetTenantId = "372752f4-b131-4c36-a887-25c96537640c";
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && (key.includes('-account-') || key.includes('.accounts.'))) {
@@ -64,14 +65,19 @@ export function PettyCash() {
           if (item) {
             const parsed = JSON.parse(item);
             if (parsed && parsed.homeAccountId && parsed.username) {
-              return {
-                homeAccountId: parsed.homeAccountId,
-                environment: parsed.environment || 'login.microsoftonline.com',
-                tenantId: parsed.realm || '',
-                username: parsed.username,
-                localAccountId: parsed.localAccountId || parsed.homeAccountId,
-                name: parsed.name || parsed.username.split('@')[0],
-              };
+              const realm = parsed.realm || '';
+              const homeAccountId = parsed.homeAccountId || '';
+              // Ensure the tenant ID matches our specific tenant ID to prevent false-positives from other apps on the same domain
+              if (realm === targetTenantId || homeAccountId.includes(targetTenantId)) {
+                return {
+                  homeAccountId: parsed.homeAccountId,
+                  environment: parsed.environment || 'login.microsoftonline.com',
+                  tenantId: parsed.realm || targetTenantId,
+                  username: parsed.username,
+                  localAccountId: parsed.localAccountId || parsed.homeAccountId,
+                  name: parsed.name || parsed.username.split('@')[0],
+                };
+              }
             }
           }
         } catch (e) {
@@ -86,39 +92,60 @@ export function PettyCash() {
     if (instance.getAllAccounts().length > 0) return true;
     if (getStoredMsalToken()) return true;
     if (getStoredMsalAccount()) return true;
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && (key.includes('-account-') || key.includes('.accounts.'))) {
-        try {
-          const item = localStorage.getItem(key);
-          if (item) {
-            const parsed = JSON.parse(item);
-            if (parsed && parsed.homeAccountId) return true;
-          }
-        } catch (e) {}
-      }
-    }
+    // Check if there is a valid stored account specifically for our tenant to avoid false positives
+    const storedAccount = getMSALAccountFromStorage();
+    if (storedAccount) return true;
     return false;
   });
   
   useEffect(() => {
-    const allAccounts = instance.getAllAccounts();
-    const hasAccounts = allAccounts.length > 0 || accounts.length > 0;
-    if (hasAccounts) {
-      if (!instance.getActiveAccount()) {
-        const active = allAccounts[0] || accounts[0];
-        if (active) {
-          instance.setActiveAccount(active);
+    const initAndCheckToken = async () => {
+      // Set active account first if possible
+      const allAccounts = instance.getAllAccounts();
+      const hasAccounts = allAccounts.length > 0 || accounts.length > 0;
+      if (hasAccounts) {
+        if (!instance.getActiveAccount()) {
+          const active = allAccounts[0] || accounts[0];
+          if (active) {
+            instance.setActiveAccount(active);
+          }
+        }
+      } else {
+        const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+        if (stored) {
+          instance.setActiveAccount(stored as any);
         }
       }
-      setMsalReady(true);
-    } else {
-      const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
-      if (stored) {
-        instance.setActiveAccount(stored as any);
+
+      // Check token status
+      const token = getStoredMsalToken();
+      if (token) {
         setMsalReady(true);
+        return;
       }
-    }
+
+      // If no valid stored token, but we have accounts or stored accounts, try silent refresh
+      const hasAccount = allAccounts.length > 0 || accounts.length > 0 || getStoredMsalAccount() || getMSALAccountFromStorage();
+      if (hasAccount) {
+        try {
+          const freshToken = await getFreshGraphToken();
+          if (freshToken) {
+            const activeAcc = instance.getActiveAccount() || allAccounts[0] || accounts[0] || getStoredMsalAccount() || getMSALAccountFromStorage();
+            saveMsalSession(activeAcc, freshToken, Date.now() + 3500 * 1000);
+            setMsalReady(true);
+          } else {
+            setMsalReady(false);
+          }
+        } catch (err) {
+          console.warn("Silent token refresh on mount/change failed:", err);
+          setMsalReady(false);
+        }
+      } else {
+        setMsalReady(false);
+      }
+    };
+
+    initAndCheckToken();
   }, [accounts, instance, getMSALAccountFromStorage]);
   
   const customInteractiveLogin = async () => {
@@ -271,6 +298,7 @@ export function PettyCash() {
   const itemsPerPage = 10;
   const handleMicrosoftLogout = () => {
     try {
+      clearMsalSession();
       const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
       if (activeAccount) {
         instance.logoutPopup({ account: activeAccount }).then(() => {
@@ -287,8 +315,7 @@ export function PettyCash() {
         toast.success("Microsoft Auth Cache cleared.");
       }
     } catch (e) {
-      localStorage.clear();
-      sessionStorage.clear();
+      clearMsalSession();
       setMsalReady(false);
       window.location.reload();
     }
@@ -739,6 +766,23 @@ export function PettyCash() {
       let finalReceiptUrl = existingReceiptUrl;
       
       if (receiptFile) {
+        // Active validation check: if token is not valid and cannot be silently refreshed, block form submit and notify user
+        const activeToken = getStoredMsalToken();
+        if (!activeToken) {
+          try {
+            const freshToken = await getFreshGraphToken();
+            if (!freshToken) {
+              throw new Error("No token returned");
+            }
+          } catch (err) {
+            console.error("Token validation error prior to submission:", err);
+            toast.error("Your Microsoft account connection has expired. Please connect your account first before saving.");
+            setMsalReady(false);
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
         let uploadedUrl = "";
         try {
           const filePath = `receipts/${Date.now()}_${receiptFile.name}`;
@@ -811,8 +855,20 @@ export function PettyCash() {
             uploadedUrl = sharedUrl;
           } catch (uploadError: any) {
                console.error("OneDrive upload error", uploadError);
+               const errMsg = uploadError.message || String(uploadError);
+               // If there is an authorization/expiry error, reset the MSAL connection state so the user can re-login
+               if (
+                 errMsg.toLowerCase().includes('expired') || 
+                 errMsg.toLowerCase().includes('auth') || 
+                 errMsg.toLowerCase().includes('login') || 
+                 errMsg.toLowerCase().includes('lifetime validation') ||
+                 errMsg.toLowerCase().includes('authenticated')
+               ) {
+                 clearMsalSession();
+                 setMsalReady(false);
+               }
                // Correctly report the Microsoft Graph API/OneDrive upload error instead of the Supabase error
-               toast.error(`Upload failed: ${uploadError.message || uploadError || 'Storage Error'}`);
+               toast.error(`Upload failed: ${errMsg}`);
                setIsSubmitting(false);
                return;
           }
@@ -1358,22 +1414,32 @@ export function PettyCash() {
                     Connect Microsoft Account
                   </Button>
                 ) : (
-                  <>
-                    <input 
-                      type="file" 
-                      ref={fileInputRef}
-                      accept="image/*" 
-                      onChange={handleFileUpload}
-                      className="hidden" 
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="border-slate-200 dark:border-white/10"
-                    >
-                      Choose File
-                    </Button>
+                  <div className="flex flex-col gap-2 w-full">
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="file" 
+                        ref={fileInputRef}
+                        accept="image/*" 
+                        onChange={handleFileUpload}
+                        className="hidden" 
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-slate-200 dark:border-white/10"
+                      >
+                        Choose File
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={handleMicrosoftLogout}
+                        className="text-xs text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 h-9 px-3"
+                      >
+                        Disconnect Account
+                      </Button>
+                    </div>
                     <div className="flex items-center gap-2">
                        {isCompressing ? (
                          <span className="text-sm text-slate-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/> Compressing...</span>
@@ -1385,7 +1451,7 @@ export function PettyCash() {
                          <span className="text-sm text-slate-500">No file chosen.</span>
                        )}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
 

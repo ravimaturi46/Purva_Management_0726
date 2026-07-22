@@ -8,7 +8,14 @@ import { toast } from 'sonner';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { loginRequest, getFreshGraphToken, msalConfig } from '../lib/msalConfig';
-import { getGraphClientInstance } from '../lib/msalHelper';
+import { 
+  getGraphClientInstance, 
+  getStoredMsalToken, 
+  getStoredMsalAccount, 
+  getMSALAccountFromStorage, 
+  saveMsalSession, 
+  clearMsalSession 
+} from '../lib/msalHelper';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { Client } from '@microsoft/microsoft-graph-client';
 
@@ -44,8 +51,62 @@ export const AssetManagement: React.FC = () => {
   const [dashboardStats, setDashboardStats] = useState({ asset: 0, fd: 0, loan: 0 });
   
   // MSAL setup for File Upload
-  const { instance, inProgress } = useMsal();
-  const [msalReady, setMsalReady] = useState(() => instance.getAllAccounts().length > 0);
+  const { instance, accounts, inProgress } = useMsal();
+  const [msalReady, setMsalReady] = useState(() => {
+    if (instance.getAllAccounts().length > 0) return true;
+    if (getStoredMsalToken()) return true;
+    if (getStoredMsalAccount()) return true;
+    const storedAccount = getMSALAccountFromStorage();
+    if (storedAccount) return true;
+    return false;
+  });
+
+  useEffect(() => {
+    const initAndCheckToken = async () => {
+      const allAccounts = instance.getAllAccounts();
+      const hasAccounts = allAccounts.length > 0 || (accounts && accounts.length > 0);
+      if (hasAccounts) {
+        if (!instance.getActiveAccount()) {
+          const active = allAccounts[0] || accounts[0];
+          if (active) {
+            instance.setActiveAccount(active);
+          }
+        }
+      } else {
+        const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+        if (stored) {
+          instance.setActiveAccount(stored as any);
+        }
+      }
+
+      const token = getStoredMsalToken();
+      if (token) {
+        setMsalReady(true);
+        return;
+      }
+
+      const hasAccount = allAccounts.length > 0 || (accounts && accounts.length > 0) || getStoredMsalAccount() || getMSALAccountFromStorage();
+      if (hasAccount) {
+        try {
+          const freshToken = await getFreshGraphToken();
+          if (freshToken) {
+            const activeAcc = instance.getActiveAccount() || allAccounts[0] || (accounts && accounts[0]) || getStoredMsalAccount() || getMSALAccountFromStorage();
+            saveMsalSession(activeAcc, freshToken, Date.now() + 3500 * 1000);
+            setMsalReady(true);
+          } else {
+            setMsalReady(false);
+          }
+        } catch (err) {
+          console.warn("Silent token refresh on mount/change failed:", err);
+          setMsalReady(false);
+        }
+      } else {
+        setMsalReady(false);
+      }
+    };
+
+    initAndCheckToken();
+  }, [accounts, instance]);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
@@ -117,6 +178,29 @@ export const AssetManagement: React.FC = () => {
     return await getGraphClientInstance(instance);
   }, [instance]);
 
+  const handleMicrosoftLogout = () => {
+    try {
+      clearMsalSession();
+      const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
+      if (activeAccount) {
+        instance.logoutPopup({ account: activeAccount }).then(() => {
+          setMsalReady(false);
+          toast.success("Logged out from Microsoft successfully");
+        }).catch(() => {
+          setMsalReady(false);
+          toast.success("Microsoft Session cleared locally.");
+        });
+      } else {
+        setMsalReady(false);
+        toast.success("Microsoft Auth Cache cleared.");
+      }
+    } catch (e) {
+      clearMsalSession();
+      setMsalReady(false);
+      window.location.reload();
+    }
+  };
+
   const handleLogin = () => {
     if (inProgress !== "none") {
       toast.info("Authentication is already in progress. Please wait.");
@@ -129,15 +213,23 @@ export const AssetManagement: React.FC = () => {
     window.open(`${window.location.origin}?auth_action=login`, 'oauth_popup', `width=${width},height=${height},left=${left},top=${top}`);
     
     const receiveMessage = async (event: MessageEvent) => {
-      if (typeof event.data === 'string' && event.data === 'msal_login_success') {
+      const data = event.data;
+      const isSuccess = data === 'msal_login_success' || (data && data.type === 'msal_login_success');
+      if (isSuccess) {
         window.removeEventListener('message', receiveMessage);
         clearInterval(pollInterval);
+        
+        if (data && data.type === 'msal_login_success' && data.token) {
+          saveMsalSession(data.account, data.token, data.expiresOn);
+        }
+
         try {
           const pca = new PublicClientApplication(msalConfig);
           await pca.initialize();
           const allAccounts = pca.getAllAccounts();
-          if (allAccounts.length > 0) {
-            instance.setActiveAccount(allAccounts[0]);
+          const activeAcc = allAccounts[0] || (data && data.account) || getStoredMsalAccount() || getMSALAccountFromStorage();
+          if (activeAcc) {
+            instance.setActiveAccount(activeAcc as any);
           }
         } catch (err) {
           console.warn("Error initializing fresh MSAL in AssetManagement message handler:", err);
@@ -158,7 +250,10 @@ export const AssetManagement: React.FC = () => {
         if (pca.getAllAccounts().length > 0) {
           clearInterval(pollInterval);
           window.removeEventListener('message', receiveMessage);
-          instance.setActiveAccount(pca.getAllAccounts()[0]);
+          const activeAcc = pca.getAllAccounts()[0] || getStoredMsalAccount() || getMSALAccountFromStorage();
+          if (activeAcc) {
+            instance.setActiveAccount(activeAcc);
+          }
           setMsalReady(true);
           toast.success("Successfully logged in to Microsoft");
         }
@@ -177,6 +272,23 @@ export const AssetManagement: React.FC = () => {
     if (!selectedFile) return null;
     try {
       setIsUploading(true);
+      
+      // Active validation check: if token is not valid and cannot be silently refreshed, throw
+      const activeToken = getStoredMsalToken();
+      if (!activeToken) {
+        try {
+          const freshToken = await getFreshGraphToken();
+          if (!freshToken) {
+            throw new Error("No token returned from refresh");
+          }
+        } catch (err) {
+          console.error("Token validation error prior to upload in AssetManagement:", err);
+          toast.error("Your Microsoft account connection has expired. Please connect your account again.");
+          setMsalReady(false);
+          return null;
+        }
+      }
+
       const client = await getGraphClient();
       
       const timestamp = new Date().getTime();
@@ -189,7 +301,18 @@ export const AssetManagement: React.FC = () => {
       return response['@microsoft.graph.downloadUrl'] || response.webUrl;
     } catch (err: any) {
       console.error("Upload error:", err);
-      toast.error("Failed to upload file to OneDrive.");
+      const errMsg = err.message || String(err);
+      if (
+        errMsg.toLowerCase().includes('expired') || 
+        errMsg.toLowerCase().includes('auth') || 
+        errMsg.toLowerCase().includes('login') || 
+        errMsg.toLowerCase().includes('lifetime validation') ||
+        errMsg.toLowerCase().includes('authenticated')
+      ) {
+        clearMsalSession();
+        setMsalReady(false);
+      }
+      toast.error(`Failed to upload file to OneDrive: ${errMsg}`);
       return null;
     } finally {
       setIsUploading(false);
@@ -468,8 +591,7 @@ export const AssetManagement: React.FC = () => {
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 pb-2 border-b border-slate-200 dark:border-slate-700 mb-4">
                   {activeTab === 'asset' ? 'Upload Photo / Invoice' : 'Upload Document'} (Microsoft OneDrive)
                 </label>
-                
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                   {!msalReady ? (
                     <Button type="button" variant="outline" onClick={handleLogin} className="border-[#0078D4] text-[#0078D4]">
                       Connect Microsoft Account to Upload
@@ -506,6 +628,15 @@ export const AssetManagement: React.FC = () => {
                           </button>
                         </div>
                       )}
+
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={handleMicrosoftLogout}
+                        className="text-xs text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 h-9 px-3 ml-auto sm:ml-0"
+                      >
+                        Disconnect Account
+                      </Button>
                     </>
                   )}
                 </div>

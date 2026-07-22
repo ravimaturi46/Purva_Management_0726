@@ -60,6 +60,40 @@ export function getStoredMsalAccount(): StoredMSALAccount | null {
   return null;
 }
 
+// Search localStorage specifically for our tenant account to avoid false-positives
+export function getMSALAccountFromStorage(): StoredMSALAccount | null {
+  const targetTenantId = "372752f4-b131-4c36-a887-25c96537640c";
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.includes('-account-') || key.includes('.accounts.'))) {
+      try {
+        const item = localStorage.getItem(key);
+        if (item) {
+          const parsed = JSON.parse(item);
+          if (parsed && parsed.homeAccountId && parsed.username) {
+            const realm = parsed.realm || '';
+            const homeAccountId = parsed.homeAccountId || '';
+            // Ensure the tenant ID matches our specific tenant ID to prevent false-positives from other apps on the same domain
+            if (realm === targetTenantId || homeAccountId.includes(targetTenantId)) {
+              return {
+                homeAccountId: parsed.homeAccountId,
+                environment: parsed.environment || 'login.microsoftonline.com',
+                tenantId: parsed.realm || targetTenantId,
+                username: parsed.username,
+                localAccountId: parsed.localAccountId || parsed.homeAccountId,
+                name: parsed.name || parsed.username.split('@')[0],
+              };
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
+  return null;
+}
+
 // Get valid stored token
 export function getStoredMsalToken(): string | null {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -88,7 +122,7 @@ export function getActiveMsalAccount(instance: any): AccountInfo | null {
   }
 
   // Then try stored simplified account
-  const stored = getStoredMsalAccount();
+  const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
   if (stored) {
     // Construct a pseudo-AccountInfo
     const pseudoAccount: any = {
@@ -134,12 +168,15 @@ export async function getGraphAccessToken(instance: any): Promise<string> {
     return response.accessToken;
   } catch (e) {
     console.warn("Silent token acquisition failed, checking if we can use existing stored token anyway:", e);
-    // If silent acquisition failed but we have a stored token, we can try using it even if it's close to expiry
-    const rawToken = localStorage.getItem(TOKEN_KEY);
-    if (rawToken) {
-      return rawToken;
+    // Only return cached token if it is actually still valid according to our expiration checks
+    const cachedToken = getStoredMsalToken();
+    if (cachedToken) {
+      return cachedToken;
     }
-    throw e;
+    
+    // If token is truly expired or silent acquisition failed, we must clear the session to allow re-login and throw
+    clearMsalSession();
+    throw new Error("Microsoft login session has expired. Please connect your account again.");
   }
 }
 

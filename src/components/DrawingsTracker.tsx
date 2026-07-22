@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useMsal, useIsAuthenticated } from '@azure/msal-react';
 import { loginRequest, getFreshGraphToken, hasActiveMsalAccount, msalConfig } from '../lib/msalConfig';
-import { getGraphClientInstance } from '../lib/msalHelper';
+import { 
+  getGraphClientInstance, 
+  getStoredMsalToken, 
+  getStoredMsalAccount, 
+  getMSALAccountFromStorage, 
+  saveMsalSession, 
+  clearMsalSession 
+} from '../lib/msalHelper';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { Button } from './ui/button';
@@ -29,7 +36,62 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
   onFileUploaded
 }) => {
   const { instance, accounts, inProgress } = useMsal();
-  const [msalReady, setMsalReady] = useState(() => instance.getAllAccounts().length > 0);
+  const [msalReady, setMsalReady] = useState(() => {
+    if (instance.getAllAccounts().length > 0) return true;
+    if (getStoredMsalToken()) return true;
+    if (getStoredMsalAccount()) return true;
+    const storedAccount = getMSALAccountFromStorage();
+    if (storedAccount) return true;
+    return false;
+  });
+
+  useEffect(() => {
+    const initAndCheckToken = async () => {
+      const allAccounts = instance.getAllAccounts();
+      const hasAccounts = allAccounts.length > 0 || (accounts && accounts.length > 0);
+      if (hasAccounts) {
+        if (!instance.getActiveAccount()) {
+          const active = allAccounts[0] || accounts[0];
+          if (active) {
+            instance.setActiveAccount(active);
+          }
+        }
+      } else {
+        const stored = getStoredMsalAccount() || getMSALAccountFromStorage();
+        if (stored) {
+          instance.setActiveAccount(stored as any);
+        }
+      }
+
+      const token = getStoredMsalToken();
+      if (token) {
+        setMsalReady(true);
+        return;
+      }
+
+      const hasAccount = allAccounts.length > 0 || (accounts && accounts.length > 0) || getStoredMsalAccount() || getMSALAccountFromStorage();
+      if (hasAccount) {
+        try {
+          const freshToken = await getFreshGraphToken();
+          if (freshToken) {
+            const activeAcc = instance.getActiveAccount() || allAccounts[0] || (accounts && accounts[0]) || getStoredMsalAccount() || getMSALAccountFromStorage();
+            saveMsalSession(activeAcc, freshToken, Date.now() + 3500 * 1000);
+            setMsalReady(true);
+          } else {
+            setMsalReady(false);
+          }
+        } catch (err) {
+          console.warn("Silent token refresh on mount/change failed:", err);
+          setMsalReady(false);
+        }
+      } else {
+        setMsalReady(false);
+      }
+    };
+
+    initAndCheckToken();
+  }, [accounts, instance]);
+
   const isAuthenticated = useIsAuthenticated() || msalReady;
   const { user, allUsers } = useUser();
   const { canViewFile, canDownloadFile } = useFileSettings();
@@ -179,6 +241,29 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
     });
   };
 
+  const handleMicrosoftLogout = () => {
+    try {
+      clearMsalSession();
+      const activeAccount = instance.getActiveAccount() || instance.getAllAccounts()[0];
+      if (activeAccount) {
+        instance.logoutPopup({ account: activeAccount }).then(() => {
+          setMsalReady(false);
+          toast.success("Logged out from Microsoft successfully");
+        }).catch(() => {
+          setMsalReady(false);
+          toast.success("Microsoft Session cleared locally.");
+        });
+      } else {
+        setMsalReady(false);
+        toast.success("Microsoft Auth Cache cleared.");
+      }
+    } catch (e) {
+      clearMsalSession();
+      setMsalReady(false);
+      window.location.reload();
+    }
+  };
+
   const handleLogin = async () => {
     if (inProgress !== "none") {
       toast.info("Authentication is already in progress. Please wait.");
@@ -192,15 +277,23 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
     window.open(`${window.location.origin}?auth_action=login`, 'oauth_popup', `width=${width},height=${height},left=${left},top=${top}`);
     
     const receiveMessage = async (event: MessageEvent) => {
-      if (typeof event.data === 'string' && event.data === 'msal_login_success') {
+      const data = event.data;
+      const isSuccess = data === 'msal_login_success' || (data && data.type === 'msal_login_success');
+      if (isSuccess) {
         window.removeEventListener('message', receiveMessage);
         clearInterval(pollInterval);
+        
+        if (data && data.type === 'msal_login_success' && data.token) {
+          saveMsalSession(data.account, data.token, data.expiresOn);
+        }
+
         try {
           const pca = new PublicClientApplication(msalConfig);
           await pca.initialize();
           const allAccounts = pca.getAllAccounts();
-          if (allAccounts.length > 0) {
-            instance.setActiveAccount(allAccounts[0]);
+          const activeAcc = allAccounts[0] || (data && data.account) || getStoredMsalAccount() || getMSALAccountFromStorage();
+          if (activeAcc) {
+            instance.setActiveAccount(activeAcc as any);
           }
         } catch (err) {
           console.warn("Error initializing fresh MSAL in DrawingsTracker message handler:", err);
@@ -226,7 +319,10 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
         if (pca.getAllAccounts().length > 0) {
           clearInterval(pollInterval);
           window.removeEventListener('message', receiveMessage);
-          instance.setActiveAccount(pca.getAllAccounts()[0]);
+          const activeAcc = pca.getAllAccounts()[0] || getStoredMsalAccount() || getMSALAccountFromStorage();
+          if (activeAcc) {
+            instance.setActiveAccount(activeAcc);
+          }
           setMsalReady(true);
           toast.success("Successfully logged in to Microsoft");
         }
@@ -280,6 +376,23 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
 
     setIsUploading(true);
     try {
+      // Active validation check: if token is not valid and cannot be silently refreshed, throw
+      const activeToken = getStoredMsalToken();
+      if (!activeToken) {
+        try {
+          const freshToken = await getFreshGraphToken();
+          if (!freshToken) {
+            throw new Error("No token returned from refresh");
+          }
+        } catch (err) {
+          console.error("Token validation error prior to upload in DrawingsTracker:", err);
+          toast.error("Your Microsoft account connection has expired. Please connect your account again.");
+          setMsalReady(false);
+          setIsUploading(false);
+          return;
+        }
+      }
+
       let file = originalFile;
       if (file.type.startsWith('image/') && file.type !== 'image/webp') {
         file = await convertToWebP(file);
@@ -362,9 +475,20 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
       
       toast.success("File uploaded and shared successfully");
       if (onFileUploaded) onFileUploaded(); // Refresh the list
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error uploading file:", error);
-      toast.error("Failed to upload file");
+      const errMsg = error.message || String(error);
+      if (
+        errMsg.toLowerCase().includes('expired') || 
+        errMsg.toLowerCase().includes('auth') || 
+        errMsg.toLowerCase().includes('login') || 
+        errMsg.toLowerCase().includes('lifetime validation') ||
+        errMsg.toLowerCase().includes('authenticated')
+      ) {
+        clearMsalSession();
+        setMsalReady(false);
+      }
+      toast.error(`Failed to upload file to OneDrive: ${errMsg}`);
     } finally {
       setIsUploading(false);
       if (event.target) {
@@ -420,10 +544,22 @@ export const DrawingsTracker: React.FC<DrawingsTrackerProps> = ({
         </div>
       </div>
 
-      {!isAuthenticated && (
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 flex items-center justify-between">
+      {isAuthenticated ? (
+        <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4 flex items-center justify-between mb-4">
+          <div className="flex items-center text-emerald-800 dark:text-emerald-300">
+            <FolderOpen className="w-5 h-5 mr-3 text-emerald-500" />
+            <div>
+              <p className="font-bold text-sm">Microsoft OneDrive Connected</p>
+              <p className="text-xs opacity-90">You can securely upload, view, and download project files.</p>
+            </div>
+          </div>
+          <Button variant="ghost" onClick={handleMicrosoftLogout} className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/10 text-xs">
+            Disconnect
+          </Button>
+        </div>
+      ) : (
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 flex items-center justify-between mb-4">
           <div className="flex items-center text-blue-800 dark:text-blue-300">
-            <Loader2 className="w-5 h-5 mr-3 hidden" />
             <div>
               <p className="font-bold text-sm">Authentication Required</p>
               <p className="text-xs opacity-90">Please sign in with your Microsoft account to view and download secure project files.</p>
