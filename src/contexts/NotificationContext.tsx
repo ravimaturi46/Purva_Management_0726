@@ -61,6 +61,75 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
+  const triggerNativePushNotification = async (title: string, cleanMessage: string, metadata?: any) => {
+    if (typeof window === 'undefined') return;
+
+    const isInIframe = window.self !== window.top;
+
+    if (!('Notification' in window)) {
+      console.warn('Browser notifications not supported.');
+      return;
+    }
+
+    let permission = Notification.permission;
+    if (permission === 'default') {
+      try {
+        permission = await Notification.requestPermission();
+        setBrowserPermission(permission as any);
+      } catch (e) {
+        console.warn('Could not request Notification permission:', e);
+      }
+    }
+
+    if (permission !== 'granted') {
+      return;
+    }
+
+    const notifOptions: any = {
+      body: cleanMessage,
+      icon: '/auth.html',
+      badge: '/auth.html',
+      tag: `notif_${Date.now()}`,
+      renotify: true,
+      requireInteraction: false,
+      data: { metadata }
+    };
+
+    let pushDelivered = false;
+
+    // 1. Try Service Worker showNotification (Best for OS & mobile system tray popups)
+    if ('serviceWorker' in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (registration && registration.showNotification) {
+          await registration.showNotification(title, notifOptions);
+          pushDelivered = true;
+        }
+      } catch (swErr) {
+        console.debug('Service Worker showNotification notice:', swErr);
+      }
+    }
+
+    // 2. Fallback to standard Notification constructor
+    if (!pushDelivered) {
+      try {
+        const n = new Notification(title, notifOptions);
+        n.onclick = () => {
+          window.focus();
+          if (metadata) {
+            window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { title, message: cleanMessage, metadata } }));
+          }
+        };
+        pushDelivered = true;
+      } catch (err: any) {
+        console.warn('Standard Notification trigger error:', err);
+        if (isInIframe) {
+          toast.info('OS Device Alerts: Please open the app in a new browser tab (↗️) to allow OS system popups outside iframe restrictions.');
+        }
+      }
+    }
+  };
+
   useEffect(() => {
     if (user?.id) {
       fetchNotifications();
@@ -78,14 +147,14 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const newNotif = payload.new as Notification;
           setNotifications(prev => [newNotif, ...prev]);
 
-          // 1. Play professional auditory cue via browser AudioContext
+          // Play auditory cue
           try {
             const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
             const osc = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
-            osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.1); // G5
+            osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.1);
             gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
             gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
             osc.connect(gainNode);
@@ -93,7 +162,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             osc.start();
             osc.stop(audioCtx.currentTime + 0.25);
           } catch (e) {
-            console.debug('Auditory cue blocked or unsupported until first user interaction');
+            console.debug('Auditory cue note');
           }
 
           const messageParts = (newNotif.message || '').split(' ||METADATA||');
@@ -103,11 +172,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             try {
               metadata = JSON.parse(messageParts[1]);
             } catch (e) {
-              console.error('Error parsing notification metadata:', e);
+              console.error('Error parsing metadata:', e);
             }
           }
 
-          // 2. Trigger highly-visible in-app toast fallback (works 100% of the time, even inside sandbox iframes)
+          // In-app toast banner
           toast(newNotif.title, {
             description: cleanMessage,
             duration: 8000,
@@ -119,61 +188,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             } : undefined,
           });
 
-          // 3. Trigger native OS/Browser push notification (pops up on OS system tray even when browser tab is inactive/minimized)
-          if (typeof window !== 'undefined' && 'Notification' in window) {
-            if (Notification.permission === 'granted') {
-              const notifOptions: any = {
-                body: cleanMessage,
-                icon: '/auth.html',
-                tag: newNotif.id || `notif_${Date.now()}`,
-                renotify: true,
-                requireInteraction: false,
-              };
-
-              let swTriggered = false;
-              if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.getRegistration().then((registration) => {
-                  if (registration && registration.showNotification) {
-                    swTriggered = true;
-                    registration.showNotification(newNotif.title, notifOptions);
-                  } else {
-                    // Fallback to constructor
-                    const n = new Notification(newNotif.title, notifOptions);
-                    n.onclick = () => {
-                      window.focus();
-                      if (metadata) {
-                        window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
-                      }
-                    };
-                  }
-                }).catch(() => {
-                  try {
-                    const n = new Notification(newNotif.title, notifOptions);
-                    n.onclick = () => {
-                      window.focus();
-                      if (metadata) {
-                        window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
-                      }
-                    };
-                  } catch (err) {
-                    console.debug('Standard notification trigger note:', err);
-                  }
-                });
-              } else {
-                try {
-                  const n = new Notification(newNotif.title, notifOptions);
-                  n.onclick = () => {
-                    window.focus();
-                    if (metadata) {
-                      window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
-                    }
-                  };
-                } catch (err) {
-                  console.debug('Direct notification constructor exception:', err);
-                }
-              }
-            }
-          }
+          // OS Push Notification
+          triggerNativePushNotification(newNotif.title, cleanMessage, metadata);
         })
         .subscribe();
 
@@ -181,7 +197,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         supabase.removeChannel(channel);
       };
     }
-  }, [user?.id, user?.full_name]);
+  }, [user?.id]);
 
   const fetchNotifications = async () => {
     if (!user) return;
@@ -267,6 +283,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const finalMessage = metadata
       ? `${message} ||METADATA||${JSON.stringify(metadata)}`
       : message;
+
+    // Immediately attempt local native push notification for real-time desktop / mobile OS alert
+    if (!targetUserId || targetUserId === user?.id || user?.role === 'admin' || user?.role === 'chief_sthapathy') {
+      triggerNativePushNotification(title, message, metadata);
+    }
 
     if (targetUserId) {
       const { error } = await supabase.from('notifications').insert({
