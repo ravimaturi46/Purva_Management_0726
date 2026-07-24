@@ -36,6 +36,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       } else {
         setBrowserPermission(Notification.permission as any);
       }
+
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(err => {
+          console.debug('Service worker registration:', err);
+        });
+      }
     }
   }, []);
 
@@ -113,35 +119,57 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             } : undefined,
           });
 
-          // 3. Trigger native OS/Browser push notification if allowed
+          // 3. Trigger native OS/Browser push notification (pops up on OS system tray even when browser tab is inactive/minimized)
           if (typeof window !== 'undefined' && 'Notification' in window) {
             if (Notification.permission === 'granted') {
-              try {
-                // Attempt native desktop notification directly first (most reliable for direct tabs)
-                const notification = new Notification(newNotif.title, {
-                  body: cleanMessage,
-                  icon: '/icon-512x512.png',
-                });
-                
-                notification.onclick = () => {
-                  window.focus();
-                  if (metadata) {
-                    window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+              const notifOptions: any = {
+                body: cleanMessage,
+                icon: '/auth.html',
+                tag: newNotif.id || `notif_${Date.now()}`,
+                renotify: true,
+                requireInteraction: false,
+              };
+
+              let swTriggered = false;
+              if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistration().then((registration) => {
+                  if (registration && registration.showNotification) {
+                    swTriggered = true;
+                    registration.showNotification(newNotif.title, notifOptions);
+                  } else {
+                    // Fallback to constructor
+                    const n = new Notification(newNotif.title, notifOptions);
+                    n.onclick = () => {
+                      window.focus();
+                      if (metadata) {
+                        window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+                      }
+                    };
                   }
-                };
-              } catch (directErr) {
-                // Fall back to Service Worker notification if standard constructor fails (e.g. some mobile/sandboxed environments)
-                if ('serviceWorker' in navigator) {
-                  navigator.serviceWorker.getRegistration().then((registration) => {
-                    if (registration && registration.showNotification) {
-                      registration.showNotification(newNotif.title, {
-                        body: cleanMessage,
-                        icon: '/icon-512x512.png',
-                      });
+                }).catch(() => {
+                  try {
+                    const n = new Notification(newNotif.title, notifOptions);
+                    n.onclick = () => {
+                      window.focus();
+                      if (metadata) {
+                        window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+                      }
+                    };
+                  } catch (err) {
+                    console.debug('Standard notification trigger note:', err);
+                  }
+                });
+              } else {
+                try {
+                  const n = new Notification(newNotif.title, notifOptions);
+                  n.onclick = () => {
+                    window.focus();
+                    if (metadata) {
+                      window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
                     }
-                  }).catch((swErr) => {
-                    console.error('Service worker notification fallback failed:', swErr);
-                  });
+                  };
+                } catch (err) {
+                  console.debug('Direct notification constructor exception:', err);
                 }
               }
             }
