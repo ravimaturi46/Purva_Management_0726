@@ -87,8 +87,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const notifOptions: any = {
       body: cleanMessage,
-      icon: '/auth.html',
-      badge: '/auth.html',
+      icon: '/notification-icon.svg',
+      badge: '/notification-icon.svg',
       tag: `notif_${Date.now()}`,
       renotify: true,
       requireInteraction: false,
