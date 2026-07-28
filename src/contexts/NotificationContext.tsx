@@ -24,10 +24,63 @@ interface NotificationContextType {
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+const DEFAULT_VAPID_PUBLIC_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-m9GYv50D21O2z-T6JgGj23_a9A4vW34O8Z21K3_2a42b_4a_a882a2_a88a';
+
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useUser();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [browserPermission, setBrowserPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
+
+  const subscribeUserToPush = async (userId: string) => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey
+        });
+      }
+
+      const subJson = subscription.toJSON();
+      if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+        const { error } = await supabase.from('user_push_subscriptions').upsert(
+          {
+            user_id: userId,
+            endpoint: subJson.endpoint,
+            p256dh: subJson.keys.p256dh,
+            auth: subJson.keys.auth,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'user_id,endpoint' }
+        );
+        if (error) {
+          console.error('Error saving push subscription to Supabase:', error);
+        } else {
+          console.log('Web Push subscription registered successfully in Supabase!');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to subscribe user to Web Push:', err);
+    }
+  };
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -38,12 +91,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
 
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(err => {
+        navigator.serviceWorker.register('/sw.js').then(() => {
+          if (user?.id && Notification.permission === 'granted') {
+            subscribeUserToPush(user.id);
+          }
+        }).catch(err => {
           console.debug('Service worker registration:', err);
         });
       }
     }
-  }, []);
+  }, [user?.id]);
 
   const requestBrowserPermission = async (): Promise<'default' | 'granted' | 'denied' | 'unsupported'> => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -54,6 +111,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     try {
       const permission = await Notification.requestPermission();
       setBrowserPermission(permission as any);
+      if (permission === 'granted' && user?.id) {
+        subscribeUserToPush(user.id);
+      }
       return permission as any;
     } catch (e) {
       console.error('Error requesting notification permission:', e);
