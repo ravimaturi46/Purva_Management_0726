@@ -200,7 +200,7 @@ export const TimeTracking: React.FC = () => {
             </div>
           </div>
           
-          <div className="space-y-1.5" key={projects.length ? 'loaded' : 'loading'}>
+          <div className="space-y-1.5" key={projects.length ? 'proj-loaded' : 'proj-loading'}>
             <Label className="text-xs font-bold uppercase tracking-widest text-slate-400">Project</Label>
             <Select 
               value={formData.project_name} 
@@ -213,13 +213,13 @@ export const TimeTracking: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 {projects.map(p => (
-                  <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
+                  <SelectItem key={p.id || p.name} value={p.name}>{p.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-1.5" key={teamMembers.length ? 'loaded' : 'loading'}>
+          <div className="space-y-1.5" key={teamMembers.length ? 'team-loaded' : 'team-loading'}>
             <Label className="text-xs font-bold uppercase tracking-widest text-slate-400">Team Member</Label>
             <Select 
               value={formData.user_id} 

@@ -246,7 +246,7 @@ export const ProjectVendorOrders: React.FC<Props> = ({ project }) => {
           </DialogHeader>
           <form onSubmit={handleAdd} className="space-y-4 mt-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2 min-w-0" key={vendors.length ? 'loaded' : 'loading'}>
+              <div className="space-y-2 min-w-0" key={vendors.length ? 'vendor-loaded' : 'vendor-loading'}>
                 <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Vendor</label>
                 <Select required value={vendorId} onValueChange={setVendorId}>
                   <SelectTrigger className="rounded-xl w-full truncate">
