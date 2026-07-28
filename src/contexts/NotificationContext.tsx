@@ -379,15 +379,68 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (!nameOrId || nameOrId === 'Unassigned' || nameOrId === 'N/A') return [];
       try {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
-        let query = supabase.from('profiles').select('id');
-        if (isUuid) {
-          query = query.eq('id', nameOrId);
-        } else {
-          query = query.ilike('full_name', nameOrId);
+
+        const { data: allProfiles, error } = await supabase.from('profiles').select('id, full_name, email');
+        if (error || !allProfiles || allProfiles.length === 0) {
+          if (isUuid) return [nameOrId];
+          return [];
         }
-        const { data } = await query;
-        if (data && data.length > 0) {
-          return data.map(d => d.id);
+
+        const matchedIds = new Set<string>();
+
+        if (isUuid) {
+          const found = allProfiles.find(p => p.id === nameOrId);
+          if (found) matchedIds.add(found.id);
+          else matchedIds.add(nameOrId);
+          return Array.from(matchedIds);
+        }
+
+        const targetNorm = nameOrId.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const targetNoH = targetNorm.replace(/h/g, '');
+        const targetWords = nameOrId.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+        for (const p of allProfiles) {
+          if (!p.full_name) {
+            if (p.email && p.email.toLowerCase() === nameOrId.trim().toLowerCase()) {
+              matchedIds.add(p.id);
+            }
+            continue;
+          }
+
+          const pNorm = p.full_name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+          const pNoH = pNorm.replace(/h/g, '');
+
+          // Exact match
+          if (pNorm === targetNorm) {
+            matchedIds.add(p.id);
+            continue;
+          }
+
+          // Spelling variation match (e.g. Dhyanesh vs Dyanesh)
+          if (pNoH === targetNoH) {
+            matchedIds.add(p.id);
+            continue;
+          }
+
+          // Email match
+          if (p.email && p.email.toLowerCase() === nameOrId.trim().toLowerCase()) {
+            matchedIds.add(p.id);
+            continue;
+          }
+
+          // Distinct word match
+          const pWords = p.full_name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          const hasWordMatch = targetWords.some(tw => 
+            tw.length >= 3 && pWords.some(pw => pw.replace(/h/g, '') === tw.replace(/h/g, ''))
+          );
+          if (hasWordMatch) {
+            matchedIds.add(p.id);
+          }
+        }
+
+        if (matchedIds.size > 0) {
+          console.log(`[NotificationTable] Resolved "${nameOrId}" ->`, Array.from(matchedIds));
+          return Array.from(matchedIds);
         }
       } catch (e) {
         console.warn('[NotificationTable] Error resolving user ID:', nameOrId, e);

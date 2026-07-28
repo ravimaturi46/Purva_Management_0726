@@ -465,90 +465,100 @@ export const Layout: React.FC<LayoutProps> = ({
                   </div>
                 </div>
 
-                {/* Browser Notification Consent & Status Panel */}
-                {browserPermission === 'default' && (
-                  <div className="p-3.5 bg-indigo-50/60 dark:bg-indigo-950/20 border-b border-slate-100 dark:border-slate-850 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Bell className="w-4 h-4 text-indigo-500 animate-bounce shrink-0" />
-                      <div className="text-left">
-                        <p className="text-xs font-bold text-slate-850 dark:text-slate-200">Enable Browser Popups</p>
-                        <p className="text-[10px] text-slate-500 leading-tight">Get real-time workspace alerts</p>
-                      </div>
-                    </div>
-                    <Button 
-                      size="sm" 
-                      onClick={async () => {
-                        const result = await requestBrowserPermission();
-                        if (result === 'granted') {
-                          toast.success("Browser notifications enabled!");
-                          try {
-                            new Notification("Purva Vedic Consultancy", {
-                              body: "Real-time alerts are now active!",
-                              icon: '/PURVA_logo_BG.svg'
-                            });
-                          } catch (err) {
-                            console.error("Failed to show permission grant notification", err);
-                          }
-                        } else if (result === 'denied') {
-                          toast.error("Notifications blocked by browser.");
-                        }
-                      }}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold h-7 px-2.5 rounded-lg shrink-0"
-                    >
-                      Allow
-                    </Button>
-                  </div>
-                )}
-
-                {browserPermission === 'denied' && (
-                  <div className="p-3.5 bg-rose-50/40 dark:bg-rose-950/10 border-b border-slate-100 dark:border-slate-850 flex flex-col gap-1.5 text-left">
+                {/* Push Notification Control Panel */}
+                <div className="p-3 bg-slate-100/70 dark:bg-slate-900/80 border-b border-slate-200/80 dark:border-slate-800 text-left">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-rose-500 text-xs font-bold">⚠️ Notifications Blocked</span>
+                      <Bell className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <span className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                        Push Notifications
+                      </span>
                     </div>
-                    <p className="text-[10px] text-slate-500 leading-normal">
-                      To receive popup alerts, click the lock or settings icon next to the URL bar and change notifications permission to <strong>Allow</strong>.
-                    </p>
-                    <Button 
-                      variant="outline"
-                      size="sm" 
-                      onClick={() => {
-                        toast.info(
-                          "To reset: Click lock/settings icon next to browser URL. Change 'Notifications' from Block to Allow.", 
-                          { duration: 8000 }
-                        );
-                      }}
-                      className="text-[10px] font-bold h-7 px-2 border-rose-200 hover:bg-rose-50/50 dark:border-rose-900/40 dark:hover:bg-rose-950/20 text-rose-600 dark:text-rose-400 self-start"
-                    >
-                      Show Instructions
-                    </Button>
-                  </div>
-                )}
-
-                {browserPermission === 'granted' && (
-                  <div className="px-3.5 py-3 bg-emerald-50/20 dark:bg-emerald-950/10 border-b border-slate-100 dark:border-slate-850 flex flex-col gap-2 text-left">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
-                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
-                          Browser & VAPID Push Alerts Active
-                        </span>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => testPushNotification()}
-                        className="text-[9px] font-bold h-6 px-2 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/50"
-                      >
-                        Test Push Alert
-                      </Button>
-                    </div>
-                    {typeof window !== 'undefined' && window.self !== window.top && (
-                      <p className="text-[9px] text-slate-500 dark:text-zinc-400 leading-normal border-t border-slate-200/50 dark:border-white/5 pt-1.5">
-                        💡 <strong>Sandbox Iframe Active:</strong> Modern browsers block OS-level push notifications from inside nested preview frames. To receive native desktop push popups, click <strong>"Open in New Tab"</strong> in the top-right corner to run the application on its direct domain.
-                      </p>
+                    {browserPermission === 'granted' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                        ON
+                      </span>
+                    )}
+                    {browserPermission === 'default' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                        OFF
+                      </span>
+                    )}
+                    {browserPermission === 'denied' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
+                        BLOCKED
+                      </span>
                     )}
                   </div>
-                )}
+
+                  {browserPermission === 'default' && (
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">
+                        Receive desktop & mobile device push alerts.
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          const result = await requestBrowserPermission();
+                          if (result === 'granted') {
+                            toast.success("Push notifications enabled!");
+                            testPushNotification();
+                          } else if (result === 'denied') {
+                            toast.error("Notifications blocked in browser permissions.");
+                          }
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold h-7 px-3 rounded-lg shrink-0"
+                      >
+                        Enable Push
+                      </Button>
+                    </div>
+                  )}
+
+                  {browserPermission === 'granted' && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[10px] text-slate-600 dark:text-zinc-400 leading-tight">
+                          Mobile & Desktop device subscriptions active.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => testPushNotification()}
+                          className="bg-white dark:bg-slate-800 text-[10px] font-bold h-6 px-2.5 border-slate-300 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 shrink-0"
+                        >
+                          Test Push Alert
+                        </Button>
+                      </div>
+                      {typeof window !== 'undefined' && window.self !== window.top && (
+                        <p className="text-[9px] text-slate-500 dark:text-zinc-400 leading-normal border-t border-slate-200/60 dark:border-slate-800 pt-1.5 mt-0.5">
+                          💡 <strong>Preview Iframe Note:</strong> To receive OS desktop popups on mobile or computer, click <strong>"Open in New Tab"</strong> (top-right) so browser permissions apply to the root app domain.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {browserPermission === 'denied' && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <p className="text-[10px] text-rose-600 dark:text-rose-400 leading-snug font-medium">
+                        Push permissions are blocked in your browser site settings.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          toast.info(
+                            "To enable push alerts: Click the lock icon next to the address bar, select 'Site settings' or 'Permissions', and set 'Notifications' to 'Allow'.",
+                            { duration: 9000 }
+                          );
+                        }}
+                        className="text-[10px] font-bold h-6 px-2.5 border-rose-200 hover:bg-rose-50 text-rose-600 dark:border-rose-900/40 dark:hover:bg-rose-950/30 dark:text-rose-400 self-start shrink-0"
+                      >
+                        How to Unblock
+                      </Button>
+                    </div>
+                  )}
+                </div>
                 <div className="max-h-[400px] overflow-y-auto">
                   {notifications.length > 0 ? (
                     <div className="divide-y divide-slate-50 dark:divide-slate-800">
@@ -666,10 +676,41 @@ export const Layout: React.FC<LayoutProps> = ({
         {/* Notification History Dialog */}
         <Dialog open={showHistory} onOpenChange={setShowHistory}>
           <DialogContent className="sm:max-w-[600px] max-h-[80vh] flex flex-col p-0 overflow-hidden rounded-3xl">
-            <DialogHeader className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
-              <DialogTitle className="text-xl font-bold text-slate-900 dark:text-slate-100">
-                Notification History
-              </DialogTitle>
+            <DialogHeader className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                  Notification History
+                </DialogTitle>
+                <div className="flex items-center gap-2">
+                  {browserPermission === 'granted' ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => testPushNotification()}
+                      className="text-xs font-bold h-8 px-3 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+                    >
+                      <Bell className="w-3.5 h-3.5 mr-1.5" />
+                      Test Push Notification
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={async () => {
+                        const result = await requestBrowserPermission();
+                        if (result === 'granted') {
+                          toast.success("Push notifications enabled!");
+                          testPushNotification();
+                        } else {
+                          toast.error("Push permissions denied by browser.");
+                        }
+                      }}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold h-8 px-3"
+                    >
+                      Enable Push Notifications
+                    </Button>
+                  )}
+                </div>
+              </div>
             </DialogHeader>
             <div className="flex-1 overflow-y-auto p-6">
               {notifications.length > 0 ? (
