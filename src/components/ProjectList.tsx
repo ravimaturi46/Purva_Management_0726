@@ -197,7 +197,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       if (projectToDelete) {
         await addNotification(
           "Project Deleted",
-          `Project "${projectToDelete.name}" has been deleted.`,
+          `Project "${projectToDelete.name}" was deleted by ${user?.full_name || "an admin"}.`,
+          undefined,
+          {
+            type: "project",
+            project_name: projectToDelete.name,
+            assigned_to: projectToDelete.assigned_to
+          }
         );
       }
 

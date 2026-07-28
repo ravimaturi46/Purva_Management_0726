@@ -375,6 +375,26 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       triggerNativePushNotification(title, message, metadata);
     }
 
+    const resolveUserIds = async (nameOrId: string | null | undefined): Promise<string[]> => {
+      if (!nameOrId || nameOrId === 'Unassigned' || nameOrId === 'N/A') return [];
+      try {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
+        let query = supabase.from('profiles').select('id');
+        if (isUuid) {
+          query = query.eq('id', nameOrId);
+        } else {
+          query = query.ilike('full_name', nameOrId);
+        }
+        const { data } = await query;
+        if (data && data.length > 0) {
+          return data.map(d => d.id);
+        }
+      } catch (e) {
+        console.warn('[NotificationTable] Error resolving user ID:', nameOrId, e);
+      }
+      return [];
+    };
+
     const recipientIds = new Set<string>();
 
     // Always include current logged-in user so at least one valid auth.users row is inserted
@@ -383,26 +403,47 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     if (targetUserId) {
-      recipientIds.add(targetUserId);
-    } else {
-      // Query admins and chief_sthapathys for broadcast
-      try {
-        const { data: admins, error: profileError } = await supabase
-          .from('profiles')
-          .select('id')
-          .in('role', ['admin', 'chief_sthapathy']);
-
-        if (profileError) {
-          console.warn('[NotificationTable] Could not fetch admin profiles for broadcast:', profileError.message);
-        } else if (admins && admins.length > 0) {
-          admins.forEach(admin => recipientIds.add(admin.id));
-        }
-      } catch (e) {
-        console.warn('[NotificationTable] Error querying admin profiles:', e);
+      const resolvedTarget = await resolveUserIds(targetUserId);
+      if (resolvedTarget.length > 0) {
+        resolvedTarget.forEach(id => recipientIds.add(id));
+      } else {
+        recipientIds.add(targetUserId);
       }
     }
 
-    // Automatically resolve and notify the assigned lead for the project if specified in metadata
+    // Always query admins and chief_sthapathys for broadcast updates
+    try {
+      const { data: admins, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .in('role', ['admin', 'chief_sthapathy']);
+
+      if (profileError) {
+        console.warn('[NotificationTable] Could not fetch admin profiles for broadcast:', profileError.message);
+      } else if (admins && admins.length > 0) {
+        admins.forEach(admin => recipientIds.add(admin.id));
+      }
+    } catch (e) {
+      console.warn('[NotificationTable] Error querying admin profiles:', e);
+    }
+
+    // Resolve assigned lead or task assignee from metadata if provided
+    if (metadata?.assigned_to) {
+      const ids = await resolveUserIds(metadata.assigned_to);
+      ids.forEach(id => recipientIds.add(id));
+    }
+
+    if (metadata?.task_assignee || metadata?.task_assigned_to) {
+      const ids = await resolveUserIds(metadata.task_assignee || metadata.task_assigned_to);
+      ids.forEach(id => recipientIds.add(id));
+    }
+
+    if (metadata?.project_assignee) {
+      const ids = await resolveUserIds(metadata.project_assignee);
+      ids.forEach(id => recipientIds.add(id));
+    }
+
+    // Automatically resolve and notify the assigned lead for the project from database if not explicitly passed
     if (metadata?.project_id || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
       try {
         let pQuery = supabase.from('projects').select('assigned_to');
@@ -413,15 +454,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
         const { data: projData } = await pQuery.maybeSingle();
         if (projData?.assigned_to) {
-          const assigneeNameOrId = projData.assigned_to;
-          const { data: leadProfiles } = await supabase
-            .from('profiles')
-            .select('id')
-            .or(`id.eq.${assigneeNameOrId},full_name.eq.${assigneeNameOrId}`);
-          
-          if (leadProfiles && leadProfiles.length > 0) {
-            leadProfiles.forEach(lp => recipientIds.add(lp.id));
-          }
+          const ids = await resolveUserIds(projData.assigned_to);
+          ids.forEach(id => recipientIds.add(id));
         }
       } catch (e) {
         console.warn('[NotificationTable] Error resolving assigned project lead:', e);

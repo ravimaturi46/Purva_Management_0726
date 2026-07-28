@@ -478,7 +478,20 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
       setNewTaskAssignee("");
       setNewTaskDeadline("");
       fetchDetails();
-      await notifyAssignee("added a new task");
+      
+      await addNotification(
+        "New Task Created",
+        `Task "${newTaskTitle}" was added to project "${project.name}". Assigned to: ${newTaskAssignee || "Unassigned"}.`,
+        undefined,
+        {
+          type: "task",
+          project_id: project.id,
+          project_name: project.name,
+          task_assignee: newTaskAssignee,
+          assigned_to: project.assigned_to
+        }
+      );
+
       toast.success("Task added");
     } catch (err: any) {
       console.error("Failed to add task:", err);
@@ -1055,6 +1068,9 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
           });
       }
 
+      const deletedProjectName = project.name;
+      const deletedProjectAssignee = project.assigned_to;
+
       const { error } = await supabase
         .from("projects")
         .delete()
@@ -1068,7 +1084,13 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
 
       await addNotification(
         "Project Deleted",
-        `Project "${project.name}" has been deleted.`,
+        `Project "${deletedProjectName}" was deleted by ${user?.full_name || "an admin"}.`,
+        undefined,
+        {
+          type: "project",
+          project_name: deletedProjectName,
+          assigned_to: deletedProjectAssignee
+        }
       );
       toast.success("Project deleted successfully");
       onUpdate();
