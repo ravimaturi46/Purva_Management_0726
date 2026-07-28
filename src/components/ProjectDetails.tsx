@@ -219,22 +219,24 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
     }
   };
 
-  const notifyAssignee = async (action: string) => {
+  const notifyAssignee = async (action: string, specificAssignee?: string | null) => {
     if (!user) return;
 
-    const assigneeNameOrId = project.assigned_to;
+    const assigneeNameOrId = specificAssignee !== undefined ? specificAssignee : project.assigned_to;
     if (!assigneeNameOrId) return;
 
     const assignee = allUsers.find(
       (u) => u.full_name === assigneeNameOrId || u.id === assigneeNameOrId,
     );
 
+    const targetUserId = assignee ? assignee.id : assigneeNameOrId;
+
     // Don't notify if the person making the change is the assignee
-    if (assignee && assignee.id !== user.id) {
+    if (targetUserId && targetUserId !== user.id) {
       await addNotification(
         "Project Update",
         `${user.full_name} ${action} on project "${project.name}"`,
-        assignee.id,
+        targetUserId,
         { type: "project", id: project.id, project_name: project.name }
       );
     }
@@ -255,8 +257,10 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
 
   const handleUpdateProject = async () => {
     try {
+      const oldAssignee = project.assigned_to;
       const finalAssignee =
         editData.assigned_to === "Unassigned" ? null : editData.assigned_to;
+
       const { error } = await supabase
         .from("projects")
         .update({
@@ -271,15 +275,63 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
         throw error;
       }
 
+      // Update local project object so UI updates instantly
+      project.assigned_to = finalAssignee || "";
+      project.name = editData.name;
+      project.client_name = editData.client_name;
+      project.description = editData.description;
+      project.progress = editData.progress;
+      project.status = editData.status as any;
+      project.deadline = editData.deadline;
+
+      const isReassigned = oldAssignee !== finalAssignee;
+
+      // 1. Notify newly reassigned user
+      if (isReassigned && finalAssignee) {
+        const newAssigneeUser = allUsers.find(
+          (u) => u.full_name === finalAssignee || u.id === finalAssignee
+        );
+        const targetUserId = newAssigneeUser ? newAssigneeUser.id : finalAssignee;
+        if (targetUserId && targetUserId !== user?.id) {
+          await addNotification(
+            "Project Assigned to You",
+            `${user?.full_name || "An admin"} assigned project "${editData.name}" to you.`,
+            targetUserId,
+            { type: "project", id: project.id, project_name: editData.name }
+          );
+        }
+      }
+
+      // 2. Notify old assigned user
+      if (isReassigned && oldAssignee) {
+        const oldAssigneeUser = allUsers.find(
+          (u) => u.full_name === oldAssignee || u.id === oldAssignee
+        );
+        const oldUserId = oldAssigneeUser ? oldAssigneeUser.id : oldAssignee;
+        if (oldUserId && oldUserId !== user?.id && oldUserId !== finalAssignee) {
+          await addNotification(
+            "Project Reassigned",
+            `Project "${editData.name}" was reassigned to ${finalAssignee || "Unassigned"} by ${user?.full_name || "an admin"}.`,
+            oldUserId,
+            { type: "project", id: project.id, project_name: editData.name }
+          );
+        }
+      }
+
+      // 3. Notify current assignee if details updated without reassignment
+      if (!isReassigned && finalAssignee) {
+        await notifyAssignee("updated project details", finalAssignee);
+      }
+
+      // 4. General broadcast notification
       await addNotification(
         "Project Updated",
-        `Project "${editData.name}" has been updated by ${user?.full_name}.`,
+        `Project "${editData.name}" was updated by ${user?.full_name || "an admin"}.${isReassigned ? ` Reassigned lead to: ${finalAssignee || "Unassigned"}.` : ""}`,
         undefined,
-        { type: "project", id: project.id, project_name: project.name }
+        { type: "project", id: project.id, project_name: editData.name }
       );
-      await notifyAssignee("updated project details");
 
-      toast.success("Project updated");
+      toast.success("Project updated successfully");
 
       // Log change
       await supabase.from("audit_logs").insert({
@@ -287,7 +339,7 @@ export const ProjectDetails: React.FC<ProjectDetailsProps> = ({
         user_id: user?.id,
         user_name: user?.full_name,
         action: "Project Update",
-        details: `Updated project details: ${Object.keys(editData).join(", ")}`,
+        details: `Updated project details: ${Object.keys(editData).join(", ")}${isReassigned ? ` (Reassigned from ${oldAssignee || "Unassigned"} to ${finalAssignee || "Unassigned"})` : ""}`,
         created_at: new Date().toISOString(),
       });
 

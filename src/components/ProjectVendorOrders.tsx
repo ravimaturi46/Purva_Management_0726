@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase';
 import { PaymentStageHistory } from './PaymentStageHistory';
 import { ConfirmDialog } from './ConfirmDialog';
 import { toast } from 'sonner';
+import { useNotifications } from '../contexts/NotificationContext';
 
 interface Props {
   project: Project;
@@ -48,6 +49,7 @@ export const ProjectVendorOrders: React.FC<Props> = ({ project }) => {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [orderToManage, setOrderToManage] = useState<VendorOrder | null>(null);
   const [isManageHistoryOpen, setIsManageHistoryOpen] = useState(false);
+  const { addNotification } = useNotifications();
 
   const projectOrders = orders.filter(o => o.project_id === project.id);
 
@@ -78,6 +80,16 @@ export const ProjectVendorOrders: React.FC<Props> = ({ project }) => {
       setOrders([data[0], ...orders]);
       setIsAddOpen(false);
       
+      const selVendor = vendors.find(v => v.id === vendorId);
+      const vName = selVendor ? selVendor.name : 'Vendor';
+
+      await addNotification(
+        `New Vendor Order Added`,
+        `Vendor order for ${vName} (Total: ₹${newOrder.total_amount}) added to project "${project.name}".`,
+        undefined,
+        { type: 'vendor', project_id: project.id, project_name: project.name }
+      );
+
       // Reset form
       setVendorId('');
       setOrderDate(new Date().toISOString().split('T')[0]);
@@ -94,6 +106,12 @@ export const ProjectVendorOrders: React.FC<Props> = ({ project }) => {
     const { error } = await supabase.from('vendor_orders').update({ status: newStatus }).eq('id', id);
     if (!error) {
       setOrders(orders.map(o => o.id === id ? { ...o, status: newStatus } : o));
+      await addNotification(
+        `Vendor Order Status Updated`,
+        `Vendor order status updated to "${newStatus}" in project "${project.name}".`,
+        undefined,
+        { type: 'vendor', project_id: project.id, project_name: project.name }
+      );
     }
   };
 
@@ -101,6 +119,12 @@ export const ProjectVendorOrders: React.FC<Props> = ({ project }) => {
     const { error } = await supabase.from('vendor_orders').update({ amount_paid: newAmount }).eq('id', id);
     if (!error) {
       setOrders(orders.map(o => o.id === id ? { ...o, amount_paid: newAmount } : o));
+      await addNotification(
+        `Vendor Payment Updated`,
+        `Vendor order payment updated to ₹${newAmount} in project "${project.name}".`,
+        undefined,
+        { type: 'vendor', project_id: project.id, project_name: project.name }
+      );
     }
   };
 

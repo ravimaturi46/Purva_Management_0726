@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import { MsalProvider } from '@azure/msal-react';
 import { msalInstance } from './lib/msalConfig';
 import App from './App.tsx';
+import '@fontsource-variable/geist';
 import './index.css';
 
 // Initialize the MSAL instance before rendering

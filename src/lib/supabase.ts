@@ -16,6 +16,7 @@ export const supabase = createClient(supabaseUrl, finalAnonKey || 'placeholder-k
 export const supabaseAdminAuth = createClient(supabaseUrl, finalAnonKey || 'placeholder-key-for-initialization', {
   auth: {
     autoRefreshToken: false,
-    persistSession: false
+    persistSession: false,
+    storageKey: 'sb-admin-auth-token'
   }
 });

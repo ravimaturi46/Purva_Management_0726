@@ -58,7 +58,13 @@ export const Dashboard: React.FC = () => {
       ]);
       
       if (projectsRes.error) throw projectsRes.error;
-      setProjects(projectsRes.data || []);
+      const fetchedProjects = projectsRes.data || [];
+      setProjects(fetchedProjects);
+      setSelectedProject((prev) => {
+        if (!prev) return null;
+        const updated = fetchedProjects.find((p: any) => p.id === prev.id);
+        return updated ? { ...prev, ...updated } : prev;
+      });
       setPaymentStages(paymentsRes.data || []);
       setVendorOrders(vendorsRes.data || []);
       setProjectChecklists(checklistsRes.data || []);

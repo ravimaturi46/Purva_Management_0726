@@ -76,7 +76,7 @@ export const Layout: React.FC<LayoutProps> = ({
   const { user, setUser, allUsers } = useUser();
   const { themeMode, setThemeMode, colorTheme, workspaceLogo, workspaceName } =
     useTheme();
-  const { notifications, unreadCount, markAsRead, markAllAsRead, browserPermission, requestBrowserPermission, addNotification } =
+  const { notifications, unreadCount, markAsRead, markAllAsRead, browserPermission, requestBrowserPermission, addNotification, testPushNotification } =
     useNotifications();
   const { language, setLanguage, t, translateData } = useLanguage();
   const { canViewDashboard, canManageBackups, canManageTimeTracking, canManageSalaries } = useFileSettings();
@@ -484,7 +484,7 @@ export const Layout: React.FC<LayoutProps> = ({
                           try {
                             new Notification("Purva Vedic Consultancy", {
                               body: "Real-time alerts are now active!",
-                              icon: '/icon-512x512.png'
+                              icon: '/PURVA_logo_BG.svg'
                             });
                           } catch (err) {
                             console.error("Failed to show permission grant notification", err);
@@ -526,11 +526,21 @@ export const Layout: React.FC<LayoutProps> = ({
 
                 {browserPermission === 'granted' && (
                   <div className="px-3.5 py-3 bg-emerald-50/20 dark:bg-emerald-950/10 border-b border-slate-100 dark:border-slate-850 flex flex-col gap-2 text-left">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
-                        Browser & Device Push Alerts Active
-                      </span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shrink-0" />
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                          Browser & VAPID Push Alerts Active
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => testPushNotification()}
+                        className="text-[9px] font-bold h-6 px-2 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/50"
+                      >
+                        Test Push Alert
+                      </Button>
                     </div>
                     {typeof window !== 'undefined' && window.self !== window.top && (
                       <p className="text-[9px] text-slate-500 dark:text-zinc-400 leading-normal border-t border-slate-200/50 dark:border-white/5 pt-1.5">

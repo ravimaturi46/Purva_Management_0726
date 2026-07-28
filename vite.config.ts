@@ -30,15 +30,14 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: '/icon-512x512.png',
-            sizes: '192x192',
-            type: 'image/png'
+            src: '/PURVA_logo_BG.svg',
+            sizes: '192x192 512x512',
+            type: 'image/svg+xml'
           },
           {
-            src: '/icon-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable'
+            src: '/notification-icon.svg',
+            sizes: '192x192',
+            type: 'image/svg+xml'
           }
         ]
       }

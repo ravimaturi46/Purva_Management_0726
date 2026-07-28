@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { cn } from '../lib/utils';
+import { useNotifications } from '../contexts/NotificationContext';
 import { 
   Select, 
   SelectContent, 
@@ -20,6 +21,7 @@ import {
 
 export const GlobalKanban: React.FC<{ onProjectClick: (p: Project) => void }> = ({ onProjectClick }) => {
   const { user, allUsers } = useUser();
+  const { addNotification } = useNotifications();
   const { t } = useLanguage();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -136,6 +138,16 @@ export const GlobalKanban: React.FC<{ onProjectClick: (p: Project) => void }> = 
       // Update local state
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t));
       toast.success(`Task moved to ${newStatus}`);
+
+      const proj = projects.find(p => p.id === task.project_id);
+      if (proj) {
+        await addNotification(
+          'Task Status Changed',
+          `${user?.full_name || 'A user'} moved task "${task.title}" to ${newStatus} in project "${proj.name}".`,
+          undefined,
+          { type: 'task', id: task.id, project_id: proj.id, project_name: proj.name }
+        );
+      }
     } catch (err) {
       toast.error('Failed to update task status');
     }

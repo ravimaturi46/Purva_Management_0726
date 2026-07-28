@@ -14,7 +14,7 @@ export const Login: React.FC = () => {
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const { workspaceName, workspaceLogo, workspaceLogoFull, getDashboardColors } = useTheme();
   const themeColors = getDashboardColors();
-  const displayLogo = workspaceLogoFull || workspaceLogo;
+  const displayLogo = workspaceLogoFull || workspaceLogo || '/PURVA_logo_BG.svg';
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,17 +76,17 @@ export const Login: React.FC = () => {
           )}
           <div className="mx-auto mb-5 flex justify-center">
             {displayLogo ? (
-              <div className="bg-white/95 dark:bg-white/90 p-3 rounded-2xl shadow-lg backdrop-blur-md">
-                <img src={displayLogo} alt="Logo" className="h-[60px] w-auto max-w-[200px] object-contain drop-shadow-sm" />
+              <div className="bg-white/95 dark:bg-white/90 p-2.5 rounded-2xl shadow-lg backdrop-blur-md flex items-center justify-center">
+                <img src={displayLogo} alt="Logo" className="w-[216px] h-[81px] object-contain drop-shadow-sm" />
               </div>
             ) : (
-              <div className="w-16 h-16 bg-white/20 dark:bg-black/20 rounded-2xl flex items-center justify-center overflow-hidden backdrop-blur-md border border-white/20">
-                <Briefcase className="w-8 h-8 text-white" />
+              <div className="bg-white/95 dark:bg-white/90 p-2.5 rounded-2xl shadow-lg backdrop-blur-md flex items-center justify-center">
+                <img src="/PURVA_logo_BG.svg" alt="Purva Vedic Consultancy Logo" className="w-[216px] h-[81px] object-contain drop-shadow-sm" />
               </div>
             )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight break-words drop-shadow-sm">
-            {isForgotPassword ? 'Reset Password' : workspaceName || 'Purva Vedic Consultancy'}
+            {isForgotPassword ? 'Reset Password' : (workspaceName || 'Purva Vedic Consultancy')}
           </h1>
           <p className="text-white/80 text-sm mt-2 font-medium">
             {isForgotPassword ? 'Enter your email to receive a reset link' : 'Project Management System'}

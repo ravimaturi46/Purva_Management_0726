@@ -20,6 +20,7 @@ interface NotificationContextType {
   addNotification: (title: string, message: string, targetUserId?: string, metadata?: any) => Promise<void>;
   browserPermission: 'default' | 'granted' | 'denied' | 'unsupported';
   requestBrowserPermission: () => Promise<'default' | 'granted' | 'denied' | 'unsupported'>;
+  testPushNotification: () => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -35,7 +36,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-const DEFAULT_VAPID_PUBLIC_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-m9GYv50D21O2z-T6JgGj23_a9A4vW34O8Z21K3_2a42b_4a_a882a2_a88a';
+const DEFAULT_VAPID_PUBLIC_KEY = 'BK3AqTAA1gq0fewhIhJmXBZcrPA_Nll1STsO4lDVZNpNFPlTlfLFKELPguhPpMnTiOnlyKSzPrtV8qYknbdqNQM';
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useUser();
@@ -44,19 +45,38 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const subscribeUserToPush = async (userId: string) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn('[WebPush] PushManager or ServiceWorker not supported in this browser environment.');
       return;
     }
     try {
       const registration = await navigator.serviceWorker.ready;
-      const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+      const vapidPublicKey = (import.meta.env.VITE_VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY).trim();
+
+      console.log('[WebPush] Registering VAPID push subscription for user:', userId);
 
       let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+      const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+
+      try {
+        if (!subscription) {
+          subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey
+          });
+          console.log('[WebPush] New PushSubscription created using VAPID key');
+        } else {
+          console.log('[WebPush] Existing PushSubscription retrieved from browser');
+        }
+      } catch (subErr) {
+        console.warn('[WebPush] Existing subscription invalid or key changed. Re-subscribing...', subErr);
+        if (subscription) {
+          await subscription.unsubscribe().catch(() => {});
+        }
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey
         });
+        console.log('[WebPush] Re-subscribed with new VAPID key successfully');
       }
 
       const subJson = subscription.toJSON();
@@ -72,13 +92,15 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           { onConflict: 'user_id,endpoint' }
         );
         if (error) {
-          console.error('Error saving push subscription to Supabase:', error);
+          console.error('[WebPush] Failed to save push subscription to Supabase user_push_subscriptions table:', error.message, error.details);
         } else {
-          console.log('Web Push subscription registered successfully in Supabase!');
+          console.log('[WebPush] Push subscription successfully saved in Supabase table user_push_subscriptions!');
         }
+      } else {
+        console.warn('[WebPush] Subscription JSON missing keys or endpoint:', subJson);
       }
-    } catch (err) {
-      console.error('Failed to subscribe user to Web Push:', err);
+    } catch (err: any) {
+      console.error('[WebPush] Error during push subscription workflow:', err);
     }
   };
 
@@ -91,13 +113,17 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
 
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').then(() => {
-          if (user?.id && Notification.permission === 'granted') {
-            subscribeUserToPush(user.id);
-          }
-        }).catch(err => {
+        navigator.serviceWorker.register('/sw.js').catch(err => {
           console.debug('Service worker registration:', err);
         });
+
+        if (user?.id && Notification.permission === 'granted') {
+          navigator.serviceWorker.ready.then(() => {
+            subscribeUserToPush(user.id);
+          }).catch(err => {
+            console.error('[WebPush] Error getting SW ready:', err);
+          });
+        }
       }
     }
   }, [user?.id]);
@@ -349,35 +375,130 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       triggerNativePushNotification(title, message, metadata);
     }
 
+    const recipientIds = new Set<string>();
+
+    // Always include current logged-in user so at least one valid auth.users row is inserted
+    if (user?.id) {
+      recipientIds.add(user.id);
+    }
+
     if (targetUserId) {
-      const { error } = await supabase.from('notifications').insert({
-        user_id: targetUserId,
+      recipientIds.add(targetUserId);
+    } else {
+      // Query admins and chief_sthapathys for broadcast
+      try {
+        const { data: admins, error: profileError } = await supabase
+          .from('profiles')
+          .select('id')
+          .in('role', ['admin', 'chief_sthapathy']);
+
+        if (profileError) {
+          console.warn('[NotificationTable] Could not fetch admin profiles for broadcast:', profileError.message);
+        } else if (admins && admins.length > 0) {
+          admins.forEach(admin => recipientIds.add(admin.id));
+        }
+      } catch (e) {
+        console.warn('[NotificationTable] Error querying admin profiles:', e);
+      }
+    }
+
+    // Automatically resolve and notify the assigned lead for the project if specified in metadata
+    if (metadata?.project_id || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
+      try {
+        let pQuery = supabase.from('projects').select('assigned_to');
+        if (metadata.project_id) {
+          pQuery = pQuery.eq('id', metadata.project_id);
+        } else if (metadata.project_name) {
+          pQuery = pQuery.eq('name', metadata.project_name);
+        }
+        const { data: projData } = await pQuery.maybeSingle();
+        if (projData?.assigned_to) {
+          const assigneeNameOrId = projData.assigned_to;
+          const { data: leadProfiles } = await supabase
+            .from('profiles')
+            .select('id')
+            .or(`id.eq.${assigneeNameOrId},full_name.eq.${assigneeNameOrId}`);
+          
+          if (leadProfiles && leadProfiles.length > 0) {
+            leadProfiles.forEach(lp => recipientIds.add(lp.id));
+          }
+        }
+      } catch (e) {
+        console.warn('[NotificationTable] Error resolving assigned project lead:', e);
+      }
+    }
+
+    if (recipientIds.size === 0) {
+      console.warn('[NotificationTable] No target recipient IDs found to insert notification.');
+      return;
+    }
+
+    // Optimistically add to current user's local notification list if relevant
+    if (user?.id && (!targetUserId || targetUserId === user.id || recipientIds.has(user.id))) {
+      const optimisticNotif: Notification = {
+        id: 'opt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        user_id: user.id,
+        title,
+        message: finalMessage,
+        read: false,
+        created_at: new Date().toISOString()
+      };
+      setNotifications(prev => [optimisticNotif, ...prev.filter(n => n.id !== optimisticNotif.id)]);
+    }
+
+    // Try batch insert first
+    const newNotifications = Array.from(recipientIds).map(uId => ({
+      user_id: uId,
+      title,
+      message: finalMessage,
+      read: false
+    }));
+
+    const { error: batchError } = await supabase.from('notifications').insert(newNotifications);
+
+    if (!batchError) {
+      console.log(`[NotificationTable] Successfully created ${newNotifications.length} notification record(s) in Supabase.`);
+      return;
+    }
+
+    console.debug('[NotificationTable] Batch insert notice (some user IDs may not exist in auth.users):', batchError.message);
+
+    // Individual insert fallback: insert one by one so valid user IDs (like current user) succeed
+    for (const uId of recipientIds) {
+      const { error: singleError } = await supabase.from('notifications').insert({
+        user_id: uId,
         title,
         message: finalMessage,
         read: false
       });
-      if (error) console.error('Error adding notification:', error);
-      return;
+      if (singleError) {
+        console.debug(`[NotificationTable] User ID ${uId} not in auth.users or restricted by RLS:`, singleError.message);
+      } else {
+        console.log(`[NotificationTable] Successfully inserted notification for user_id ${uId}`);
+      }
+    }
+  };
+
+  const testPushNotification = async () => {
+    let perm = browserPermission;
+    if (perm !== 'granted') {
+      perm = await requestBrowserPermission();
     }
 
-    // This would normally be done by a database trigger or backend
-    // But for this demo, we'll manually add it for all admins
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('id')
-      .in('role', ['admin', 'chief_sthapathy']);
-
-    if (admins) {
-      const newNotifications = admins.map(admin => ({
-        user_id: admin.id,
-        title,
-        message: finalMessage,
-        read: false
-      }));
-
-      const { error } = await supabase.from('notifications').insert(newNotifications);
-      if (error) console.error('Error adding notifications:', error);
+    if (user?.id) {
+      await subscribeUserToPush(user.id);
     }
+
+    const testTitle = 'VAPID Web Push Active';
+    const testMsg = 'Real-time VAPID web push notifications are working!';
+
+    toast.success('Test VAPID push notification triggered!');
+
+    // Trigger OS level browser popup
+    triggerNativePushNotification(testTitle, testMsg);
+
+    // Also insert into database table
+    await addNotification(testTitle, testMsg, user?.id);
   };
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -390,7 +511,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       markAllAsRead,
       addNotification,
       browserPermission,
-      requestBrowserPermission
+      requestBrowserPermission,
+      testPushNotification
     }}>
       {children}
     </NotificationContext.Provider>

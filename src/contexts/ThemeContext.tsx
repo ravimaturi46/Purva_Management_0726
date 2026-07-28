@@ -43,9 +43,15 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (localStorage.getItem('app-themeMode') as ThemeMode) || 'light';
   });
 
-  const [workspaceName, setWorkspaceNameState] = useState<string>('Purva Vedic');
-  const [workspaceLogo, setWorkspaceLogoState] = useState<string | null>(null);
-  const [workspaceLogoFull, setWorkspaceLogoFullState] = useState<string | null>(null);
+  const [workspaceName, setWorkspaceNameState] = useState<string>(() => {
+    return localStorage.getItem('app-workspace-name') || 'Purva Vedic Consultancy';
+  });
+  const [workspaceLogo, setWorkspaceLogoState] = useState<string | null>(() => {
+    return localStorage.getItem('app-workspace-logo') || '/PURVA_logo_BG.svg';
+  });
+  const [workspaceLogoFull, setWorkspaceLogoFullState] = useState<string | null>(() => {
+    return localStorage.getItem('app-workspace-logo-full') || null;
+  });
 
   useEffect(() => {
     localStorage.setItem('app-accent', accentColor);
@@ -271,8 +277,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // Update PWA manifest dynamically
       try {
         const manifestStr = JSON.stringify({
-          name: workspaceName || 'Purva Vedic Project Management',
-          short_name: workspaceName || 'Purva Vedic',
+          name: workspaceName || 'Purva Vedic Consultancy',
+          short_name: workspaceName || 'Purva Vedic Consultancy',
           display: 'standalone',
           background_color: '#ffffff',
           theme_color: '#4f46e5',

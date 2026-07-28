@@ -140,6 +140,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       }
 
       setProjects(finalProjects);
+      setSelectedProject((prev) => {
+        if (!prev) return null;
+        const updated = finalProjects.find((p) => p.id === prev.id);
+        return updated || prev;
+      });
     } catch (err: any) {
       console.error("Error fetching projects:", err);
       toast.error(`Failed to load projects: ${err.message}`);
