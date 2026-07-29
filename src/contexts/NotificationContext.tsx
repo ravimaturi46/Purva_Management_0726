@@ -357,11 +357,14 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('Error fetching matching profile IDs:', e);
     }
 
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .in('user_id', Array.from(userIds))
-      .order('created_at', { ascending: false });
+    const isAdmin = user.role === 'admin' || user.role === 'chief_sthapathy' || user.role === 'finance_manager';
+
+    let query = supabase.from('notifications').select('*');
+    if (!isAdmin) {
+      query = query.in('user_id', Array.from(userIds));
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false }).limit(200);
     
     if (!error && data) {
       setNotifications(data);
@@ -648,7 +651,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('[NotificationTable] Realtime broadcast notice:', e);
     }
 
-    // Try batch insert into database table first
+    // Try server endpoint first to bypass client RLS issues
+    try {
+      const serverRes = await fetch('/api/notifications/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientIds: Array.from(recipientIds),
+          title,
+          message,
+          metadata
+        })
+      });
+      if (serverRes.ok) {
+        console.log(`[NotificationTable] Created notification records via backend API.`);
+        fetchNotifications();
+        return;
+      }
+    } catch (apiErr) {
+      console.warn('[NotificationTable] Server API insert fallback:', apiErr);
+    }
+
+    // Direct Supabase client insert as secondary mechanism
     const newNotifications = Array.from(recipientIds).map(uId => ({
       user_id: uId,
       title,
@@ -660,6 +684,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     if (!batchError) {
       console.log(`[NotificationTable] Successfully created ${newNotifications.length} notification record(s) in Supabase.`);
+      fetchNotifications();
       return;
     }
 
@@ -683,6 +708,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         console.log(`[NotificationTable] Successfully inserted notification for user_id ${uId}`);
       }
     }
+
+    fetchNotifications();
 
     if (rlsNoticeTriggered && user?.role === 'admin') {
       console.info("[NotificationTable] Note: If cross-user notifications are blocked by Supabase RLS policies, run SQL: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);");
