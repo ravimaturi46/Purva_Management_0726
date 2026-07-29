@@ -5,15 +5,58 @@ import { createClient } from "@supabase/supabase-js";
 import "dotenv/config";
 
 // Resolve Supabase config from environment
-const supabaseUrl = (process.env.VITE_SUPABASE_URL || "").replace(/^['"]|['"]$/g, "");
-const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || "").replace(/^['"]|['"]$/g, "");
+const rawUrl = (process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/^['"]|['"]$/g, "");
+const supabaseUrl = rawUrl || "https://placeholder.supabase.co";
+const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").replace(/^['"]|['"]$/g, "");
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey || "placeholder-key");
+const supabase = (rawUrl && rawUrl !== "https://placeholder.supabase.co")
+  ? createClient(supabaseUrl, supabaseAnonKey || "placeholder-key")
+  : null;
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Endpoint to reliably insert notification records into Supabase notifications table
+app.post("/api/notifications/create", async (req, res) => {
+  try {
+    const { recipientIds, title, message, metadata } = req.body;
+    if (!recipientIds || !Array.isArray(recipientIds) || recipientIds.length === 0 || !title || !message) {
+      return res.status(400).json({ error: "Missing required fields: recipientIds, title, message" });
+    }
+
+    const finalMessage = metadata
+      ? `${message} ||METADATA||${JSON.stringify(metadata)}`
+      : message;
+
+    const newRecords = recipientIds.map((uId: string) => ({
+      user_id: uId,
+      title,
+      message: finalMessage,
+      read: false
+    }));
+
+    if (supabase) {
+      const { data, error } = await supabase.from('notifications').insert(newRecords).select();
+      if (error) {
+        console.warn("[Server Notifications] Batch insert error, attempting individual inserts:", error.message);
+        let insertedCount = 0;
+        for (const record of newRecords) {
+          const { error: singleErr } = await supabase.from('notifications').insert([record]);
+          if (!singleErr) insertedCount++;
+        }
+        return res.json({ status: "partial", insertedCount });
+      }
+      return res.json({ status: "success", insertedCount: data ? data.length : newRecords.length });
+    }
+
+    res.json({ status: "skipped_no_supabase" });
+  } catch (err: any) {
+    console.error("[Server Notifications] Error creating notifications:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // In-memory bank statement storage for fallback/simulation when Supabase table doesn't exist
 let simulatedBankAccounts = [
@@ -254,16 +297,28 @@ const finvuSavingsTransactions = [
 // 2. Fetch all statements & account info (with options to pull from Supabase or fallback)
 app.get("/api/bank/statements", async (req, res) => {
   try {
-    // Attempt to fetch from Supabase
-    let { data: dbAccounts, error: acctErr } = await supabase
-      .from("bank_accounts")
-      .select("*")
-      .order("last_updated", { ascending: false });
+    let dbAccounts: any[] | null = null;
+    let acctErr: any = null;
+    let dbTransactions: any[] | null = null;
+    let txErr: any = null;
 
-    let { data: dbTransactions, error: txErr } = await supabase
-      .from("bank_transactions")
-      .select("*")
-      .order("transaction_date", { ascending: false });
+    if (supabase) {
+      const acctRes = await supabase
+        .from("bank_accounts")
+        .select("*")
+        .order("last_updated", { ascending: false });
+      dbAccounts = acctRes.data;
+      acctErr = acctRes.error;
+
+      const txRes = await supabase
+        .from("bank_transactions")
+        .select("*")
+        .order("transaction_date", { ascending: false });
+      dbTransactions = txRes.data;
+      txErr = txRes.error;
+    } else {
+      acctErr = new Error("Supabase is not configured");
+    }
 
     // Fallback or union with simulated state
     let finalAccounts = [...simulatedBankAccounts];
@@ -368,41 +423,43 @@ app.post("/api/finvu/fetch-fi", async (req, res) => {
 
   // Let's also attempt to write this connected account to Supabase if tables exist
   let savedToSupabase = false;
-  try {
-    const { error: acctErr } = await supabase
-      .from("bank_accounts")
-      .upsert({
-        id: finvuSavingsAccount.id,
-        account_number: finvuSavingsAccount.account_number,
-        account_name: finvuSavingsAccount.account_name,
-        bank_name: finvuSavingsAccount.bank_name,
-        balance: finvuSavingsAccount.balance,
-        currency: finvuSavingsAccount.currency,
-        last_updated: finvuSavingsAccount.last_updated
-      });
+  if (supabase) {
+    try {
+      const { error: acctErr } = await supabase
+        .from("bank_accounts")
+        .upsert({
+          id: finvuSavingsAccount.id,
+          account_number: finvuSavingsAccount.account_number,
+          account_name: finvuSavingsAccount.account_name,
+          bank_name: finvuSavingsAccount.bank_name,
+          balance: finvuSavingsAccount.balance,
+          currency: finvuSavingsAccount.currency,
+          last_updated: finvuSavingsAccount.last_updated
+        });
 
-    if (!acctErr) {
-      savedToSupabase = true;
-      // Insert transactions
-      for (const tx of finvuSavingsTransactions) {
-        await supabase
-          .from("bank_transactions")
-          .insert({
-            id: tx.id,
-            account_id: finvuSavingsAccount.id,
-            transaction_date: tx.transaction_date,
-            value_date: tx.value_date,
-            description: tx.description,
-            ref_no: tx.ref_no,
-            debit: tx.debit,
-            credit: tx.credit,
-            balance: tx.balance,
-            category: tx.category
-          });
+      if (!acctErr) {
+        savedToSupabase = true;
+        // Insert transactions
+        for (const tx of finvuSavingsTransactions) {
+          await supabase
+            .from("bank_transactions")
+            .insert({
+              id: tx.id,
+              account_id: finvuSavingsAccount.id,
+              transaction_date: tx.transaction_date,
+              value_date: tx.value_date,
+              description: tx.description,
+              ref_no: tx.ref_no,
+              debit: tx.debit,
+              credit: tx.credit,
+              balance: tx.balance,
+              category: tx.category
+            });
+        }
       }
+    } catch (err) {
+      console.warn("Could not write Finvu data to Supabase, running in local memory", err);
     }
-  } catch (err) {
-    console.warn("Could not write Finvu data to Supabase, running in local memory", err);
   }
 
   res.json({
@@ -487,43 +544,45 @@ app.post("/api/bank/refresh", async (req, res) => {
 
   // Attempt to write both account and transaction to Supabase
   let savedToSupabase = false;
-  try {
-    // 1. Update/Upsert bank account
-    const { error: acctUpsertErr } = await supabase
-      .from("bank_accounts")
-      .upsert({
-        id: currentAcct.id,
-        account_number: currentAcct.account_number,
-        account_name: currentAcct.account_name,
-        bank_name: currentAcct.bank_name,
-        balance: currentAcct.balance,
-        currency: currentAcct.currency,
-        last_updated: currentAcct.last_updated
-      });
+  if (supabase) {
+    try {
+      // 1. Update/Upsert bank account
+      const { error: acctUpsertErr } = await supabase
+        .from("bank_accounts")
+        .upsert({
+          id: currentAcct.id,
+          account_number: currentAcct.account_number,
+          account_name: currentAcct.account_name,
+          bank_name: currentAcct.bank_name,
+          balance: currentAcct.balance,
+          currency: currentAcct.currency,
+          last_updated: currentAcct.last_updated
+        });
 
-    // 2. Insert fresh transaction
-    const { error: txInsertErr } = await supabase
-      .from("bank_transactions")
-      .insert({
-        id: newTx.id,
-        account_id: currentAcct.id, // linked through foreign key or text identifier
-        transaction_date: newTx.transaction_date,
-        value_date: newTx.value_date,
-        description: newTx.description,
-        ref_no: newTx.ref_no,
-        debit: newTx.debit,
-        credit: newTx.credit,
-        balance: newTx.balance,
-        category: newTx.category
-      });
+      // 2. Insert fresh transaction
+      const { error: txInsertErr } = await supabase
+        .from("bank_transactions")
+        .insert({
+          id: newTx.id,
+          account_id: currentAcct.id, // linked through foreign key or text identifier
+          transaction_date: newTx.transaction_date,
+          value_date: newTx.value_date,
+          description: newTx.description,
+          ref_no: newTx.ref_no,
+          debit: newTx.debit,
+          credit: newTx.credit,
+          balance: newTx.balance,
+          category: newTx.category
+        });
 
-    if (!acctUpsertErr && !txInsertErr) {
-      savedToSupabase = true;
-    } else {
-      console.warn("Could not insert directly to Supabase, continuing in local simulator mode:", { acctUpsertErr, txInsertErr });
+      if (!acctUpsertErr && !txInsertErr) {
+        savedToSupabase = true;
+      } else {
+        console.warn("Could not insert directly to Supabase, continuing in local simulator mode:", { acctUpsertErr, txInsertErr });
+      }
+    } catch (dbErr) {
+      console.warn("Supabase database tables missing. Simulation run complete.", dbErr);
     }
-  } catch (dbErr) {
-    console.warn("Supabase database tables missing. Simulation run complete.", dbErr);
   }
 
   res.json({
@@ -572,37 +631,39 @@ app.post("/api/cron/fetch-bank-statements", async (req, res) => {
   simulatedTransactions.unshift(newTx);
 
   let saved = false;
-  try {
-    const { error: acctErr } = await supabase
-      .from("bank_accounts")
-      .upsert({
-        id: currentAcct.id,
-        account_number: currentAcct.account_number,
-        account_name: currentAcct.account_name,
-        bank_name: currentAcct.bank_name,
-        balance: currentAcct.balance,
-        currency: currentAcct.currency,
-        last_updated: currentAcct.last_updated
-      });
+  if (supabase) {
+    try {
+      const { error: acctErr } = await supabase
+        .from("bank_accounts")
+        .upsert({
+          id: currentAcct.id,
+          account_number: currentAcct.account_number,
+          account_name: currentAcct.account_name,
+          bank_name: currentAcct.bank_name,
+          balance: currentAcct.balance,
+          currency: currentAcct.currency,
+          last_updated: currentAcct.last_updated
+        });
 
-    const { error: txErr } = await supabase
-      .from("bank_transactions")
-      .insert({
-        id: newTx.id,
-        account_id: currentAcct.id,
-        transaction_date: newTx.transaction_date,
-        value_date: newTx.value_date,
-        description: newTx.description,
-        ref_no: newTx.ref_no,
-        debit: newTx.debit,
-        credit: newTx.credit,
-        balance: newTx.balance,
-        category: newTx.category
-      });
+      const { error: txErr } = await supabase
+        .from("bank_transactions")
+        .insert({
+          id: newTx.id,
+          account_id: currentAcct.id,
+          transaction_date: newTx.transaction_date,
+          value_date: newTx.value_date,
+          description: newTx.description,
+          ref_no: newTx.ref_no,
+          debit: newTx.debit,
+          credit: newTx.credit,
+          balance: newTx.balance,
+          category: newTx.category
+        });
 
-    if (!acctErr && !txErr) saved = true;
-  } catch (err) {
-    // Supabase tables might not exist, that's fine for simulated cron logs
+      if (!acctErr && !txErr) saved = true;
+    } catch (err) {
+      // Supabase tables might not exist, that's fine for simulated cron logs
+    }
   }
 
   res.json({
