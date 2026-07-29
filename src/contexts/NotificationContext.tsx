@@ -578,11 +578,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     // Automatically resolve and notify assigned lead for project if project_id or project_name is present
-    if (metadata?.project_id || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
+    const resolvedProjectId = metadata?.project_id || (metadata?.type === 'project' ? metadata?.id : null);
+    if (resolvedProjectId || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
       try {
         let pQuery = supabase.from('projects').select('assigned_to');
-        if (metadata.project_id) {
-          pQuery = pQuery.eq('id', metadata.project_id);
+        if (resolvedProjectId) {
+          pQuery = pQuery.eq('id', resolvedProjectId);
         } else if (metadata.project_name) {
           pQuery = pQuery.eq('name', metadata.project_name);
         }
@@ -653,7 +654,40 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('[NotificationTable] Realtime broadcast notice:', e);
     }
 
-    // Direct Supabase client insert
+    // Try server endpoint first to bypass client RLS issues (if Service Role is configured)
+    try {
+      const serverRes = await fetch('/api/notifications/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientIds: Array.from(recipientIds),
+          title,
+          message,
+          metadata
+        })
+      });
+      if (serverRes.ok) {
+        console.log(`[NotificationTable] Created notification records via backend API.`);
+        fetchNotifications();
+        return;
+      } else if (serverRes.status === 403) {
+        // Backend failed due to RLS as well
+        if (user?.role === 'admin') {
+           setRlsError(true);
+           toast.error(
+             "Database RLS Policy Blocks Notifications!", 
+             { 
+               description: "To fix, go to Supabase SQL Editor and run: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);",
+               duration: 20000,
+             }
+           );
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[NotificationTable] Server API insert fallback:', apiErr);
+    }
+
+    // Direct Supabase client insert as secondary mechanism
     const newNotifications = Array.from(recipientIds).map(uId => ({
       user_id: uId,
       title,
