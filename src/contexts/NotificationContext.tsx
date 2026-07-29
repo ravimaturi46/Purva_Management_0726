@@ -21,6 +21,7 @@ interface NotificationContextType {
   browserPermission: 'default' | 'granted' | 'denied' | 'unsupported';
   requestBrowserPermission: () => Promise<'default' | 'granted' | 'denied' | 'unsupported'>;
   testPushNotification: () => Promise<void>;
+  rlsError: boolean;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -42,6 +43,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const { user } = useUser();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [browserPermission, setBrowserPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
+  const [rlsError, setRlsError] = useState(false);
   const realtimeChannelRef = React.useRef<any>(null);
   const currentUserIdsRef = React.useRef<Set<string>>(new Set());
 
@@ -651,28 +653,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('[NotificationTable] Realtime broadcast notice:', e);
     }
 
-    // Try server endpoint first to bypass client RLS issues
-    try {
-      const serverRes = await fetch('/api/notifications/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipientIds: Array.from(recipientIds),
-          title,
-          message,
-          metadata
-        })
-      });
-      if (serverRes.ok) {
-        console.log(`[NotificationTable] Created notification records via backend API.`);
-        fetchNotifications();
-        return;
-      }
-    } catch (apiErr) {
-      console.warn('[NotificationTable] Server API insert fallback:', apiErr);
-    }
-
-    // Direct Supabase client insert as secondary mechanism
+    // Direct Supabase client insert
     const newNotifications = Array.from(recipientIds).map(uId => ({
       user_id: uId,
       title,
@@ -712,7 +693,15 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     fetchNotifications();
 
     if (rlsNoticeTriggered && user?.role === 'admin') {
-      console.info("[NotificationTable] Note: If cross-user notifications are blocked by Supabase RLS policies, run SQL: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);");
+      setRlsError(true);
+      console.info("[NotificationTable] RLS blocked cross-user notifications.");
+      toast.error(
+        "Database RLS Policy Blocks Notifications!", 
+        { 
+          description: "To fix, go to Supabase SQL Editor and run: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);",
+          duration: 20000,
+        }
+      );
     }
   };
 
@@ -749,7 +738,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       addNotification,
       browserPermission,
       requestBrowserPermission,
-      testPushNotification
+      testPushNotification,
+      rlsError
     }}>
       {children}
     </NotificationContext.Provider>
