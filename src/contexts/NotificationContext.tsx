@@ -531,7 +531,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const resolvedTarget = await resolveUserIds(targetUserId);
       if (resolvedTarget.length > 0) {
         resolvedTarget.forEach(id => recipientIds.add(id));
-      } else {
+      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetUserId)) {
         recipientIds.add(targetUserId);
       }
     }
@@ -597,18 +597,22 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
-    if (recipientIds.size === 0) {
-      console.warn('[NotificationTable] No target recipient IDs found to insert notification.');
+    // Filter recipientIds to strictly contain only valid UUIDs to prevent database schema errors
+    const validUuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const finalRecipientIds = new Set(Array.from(recipientIds).filter(id => validUuidRegex.test(id)));
+
+    if (finalRecipientIds.size === 0) {
+      console.warn('[NotificationTable] No valid target recipient UUIDs found to insert notification.');
       return;
     }
 
-    // Immediately trigger local OS push notification ONLY IF the current logged in user is actually one of the intended recipientIds
-    if (user?.id && recipientIds.has(user.id)) {
+    // Immediately trigger local OS push notification ONLY IF the current logged in user is actually one of the intended finalRecipientIds
+    if (user?.id && finalRecipientIds.has(user.id)) {
       triggerNativePushNotification(title, message, metadata);
     }
 
     // Optimistically add to current user's local notification list if relevant
-    if (user?.id && (!targetUserId || targetUserId === user.id || recipientIds.has(user.id))) {
+    if (user?.id && (!targetUserId || targetUserId === user.id || finalRecipientIds.has(user.id))) {
       const optimisticNotif: Notification = {
         id: 'opt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
         user_id: user.id,
@@ -635,7 +639,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           type: 'broadcast',
           event: 'new_notification',
           payload: {
-            recipientIds: Array.from(recipientIds),
+            recipientIds: Array.from(finalRecipientIds),
             notification: notifPayload
           }
         });
@@ -645,7 +649,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           type: 'broadcast',
           event: 'new_notification',
           payload: {
-            recipientIds: Array.from(recipientIds),
+            recipientIds: Array.from(finalRecipientIds),
             notification: notifPayload
           }
         });
@@ -660,7 +664,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipientIds: Array.from(recipientIds),
+          recipientIds: Array.from(finalRecipientIds),
           title,
           message,
           metadata
@@ -688,7 +692,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     // Direct Supabase client insert as secondary mechanism
-    const newNotifications = Array.from(recipientIds).map(uId => ({
+    const newNotifications = Array.from(finalRecipientIds).map(uId => ({
       user_id: uId,
       title,
       message: finalMessage,
@@ -707,7 +711,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // Individual insert fallback: insert one by one so valid user IDs succeed
     let rlsNoticeTriggered = false;
-    for (const uId of recipientIds) {
+    for (const uId of finalRecipientIds) {
       const { error: singleError } = await supabase.from('notifications').insert({
         user_id: uId,
         title,
