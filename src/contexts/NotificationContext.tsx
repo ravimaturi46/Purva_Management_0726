@@ -37,7 +37,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-const DEFAULT_VAPID_PUBLIC_KEY = 'BK3AqTAA1gq0fewhIhJmXBZcrPA_Nll1STsO4lDVZNpNFPlTlfLFKELPguhPpMnTiOnlyKSzPrtV8qYknbdqNQM';
+const DEFAULT_VAPID_PUBLIC_KEY = 'BDw87VKhNLhk1oleZkQAi2WWwzgATjdzNP99qpFirocygPyJnhUfRjQHKVFTx6EdmeJAGSJdaEn2Ui4N8_OpFSk';
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useUser();
@@ -116,12 +116,10 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           { onConflict: 'user_id,endpoint' }
         );
         if (error) {
-          console.error('[WebPush] Failed to save push subscription to Supabase user_push_subscriptions table:', error.message, error.details);
+          console.error('[WebPush] Failed to save push subscription to Supabase:', error.message);
         } else {
-          console.log('[WebPush] Push subscription successfully saved in Supabase table user_push_subscriptions!');
+          console.log('[WebPush] Push subscription successfully saved in Supabase table!');
         }
-      } else {
-        console.warn('[WebPush] Subscription JSON missing keys or endpoint:', subJson);
       }
     } catch (err: any) {
       console.error('[WebPush] Error during push subscription workflow:', err);
@@ -176,10 +174,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const isInIframe = window.self !== window.top;
 
-    if (!('Notification' in window)) {
-      console.warn('Browser notifications not supported.');
-      return;
-    }
+    if (!('Notification' in window)) return;
 
     let permission = Notification.permission;
     if (permission === 'default') {
@@ -191,9 +186,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
-    if (permission !== 'granted') {
-      return;
-    }
+    if (permission !== 'granted') return;
 
     const notifOptions: any = {
       body: cleanMessage,
@@ -207,7 +200,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     let pushDelivered = false;
 
-    // 1. Try Service Worker showNotification (Best for OS & mobile system tray popups)
     if ('serviceWorker' in navigator) {
       try {
         const registration = await navigator.serviceWorker.getRegistration();
@@ -220,7 +212,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
-    // 2. Fallback to standard Notification constructor
     if (!pushDelivered) {
       try {
         const n = new Notification(title, notifOptions);
@@ -232,9 +223,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         };
         pushDelivered = true;
       } catch (err: any) {
-        console.warn('Standard Notification trigger error:', err);
         if (isInIframe) {
-          toast.info('OS Device Alerts: Please open the app in a new browser tab (↗️) to allow OS system popups outside iframe restrictions.');
+          toast.info('OS Device Alerts: Please open the app in a new browser tab to allow OS system popups.');
         }
       }
     }
@@ -253,7 +243,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           return [newNotif, ...prev];
         });
 
-        // Play auditory cue
+        // Auditory cue
         try {
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const osc = audioCtx.createOscillator();
@@ -282,7 +272,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
         }
 
-        // In-app toast banner
         toast(newNotif.title, {
           description: cleanMessage,
           duration: 8000,
@@ -294,11 +283,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           } : undefined,
         });
 
-        // OS Push Notification
         triggerNativePushNotification(newNotif.title, cleanMessage, metadata);
       };
-      
-      // Subscribe to postgres changes and real-time broadcast channel
+
       const channel = supabase
         .channel('notifications_changes', {
           config: { broadcast: { self: true } }
@@ -309,8 +296,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           table: 'notifications'
         }, (payload) => {
           const newNotif = payload.new as Notification;
-          const isAdminRole = user?.role === 'admin' || user?.role === 'chief_sthapathy' || user?.role === 'finance_manager';
-          if (currentUserIdsRef.current.has(newNotif.user_id) || isAdminRole) {
+          if (currentUserIdsRef.current.has(newNotif.user_id)) {
             handleIncomingNotif(newNotif);
           }
         })
@@ -318,9 +304,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const { recipientIds, notification } = payload.payload || {};
           const isTargeted = Array.isArray(recipientIds) && recipientIds.some(id => currentUserIdsRef.current.has(id));
           const isBroadcast = !recipientIds || recipientIds.length === 0;
-          const isAdminRole = user?.role === 'admin' || user?.role === 'chief_sthapathy' || user?.role === 'finance_manager';
           
-          if (isTargeted || isBroadcast || isAdminRole) {
+          if (isTargeted || isBroadcast) {
             handleIncomingNotif({
               ...notification,
               user_id: user.id
@@ -343,7 +328,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const fetchNotifications = async () => {
     if (!user) return;
     
-    // Find all IDs associated with this user's auth ID or email profile
     const userIds = new Set<string>([user.id]);
     try {
       if (user.email) {
@@ -359,12 +343,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('Error fetching matching profile IDs:', e);
     }
 
-    const isAdmin = user.role === 'admin' || user.role === 'chief_sthapathy' || user.role === 'finance_manager';
-
-    let query = supabase.from('notifications').select('*');
-    if (!isAdmin) {
-      query = query.in('user_id', Array.from(userIds));
-    }
+    let query = supabase.from('notifications').select('*').in('user_id', Array.from(userIds));
 
     const { data, error } = await query.order('created_at', { ascending: false }).limit(200);
     
@@ -376,7 +355,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const checkDeadlines = async () => {
     if (!user) return;
     
-    // Fetch tasks assigned to this user that are not completed and have a deadline
     const { data: tasks, error } = await supabase
       .from('tasks')
       .select('id, title, deadline')
@@ -400,7 +378,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         const title = `Deadline Approaching: ${task.title}`;
         const message = `This task is due in ${diffDays} days. Please ensure it is completed on time.`;
         
-        // Check if we already notified them today about this task
         const { data: existing } = await supabase
           .from('notifications')
           .select('id')
@@ -458,9 +435,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         const matchedIds = new Set<string>();
 
         if (isUuid) {
-          const found = allProfiles.find(p => p.id === nameOrId);
-          if (found) matchedIds.add(found.id);
-          else matchedIds.add(nameOrId);
+          matchedIds.add(nameOrId);
           return Array.from(matchedIds);
         }
 
@@ -471,8 +446,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         for (const p of allProfiles) {
           const pRoleNorm = (p.role || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
-          // Role match (e.g. "Finance Manager" -> role: "finance_manager")
-          if (pRoleNorm && (pRoleNorm === targetNorm || targetNorm.includes(pRoleNorm) || pRoleNorm.includes(targetNorm))) {
+          if (pRoleNorm && (pRoleNorm === targetNorm )) {
             matchedIds.add(p.id);
             continue;
           }
@@ -486,19 +460,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             const pNorm = p.full_name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
             const pNoH = pNorm.replace(/h/g, '');
 
-            // Exact name match
-            if (pNorm === targetNorm) {
+            if (pNorm === targetNorm || pNoH === targetNoH) {
               matchedIds.add(p.id);
               continue;
             }
 
-            // Spelling variation match
-            if (pNoH === targetNoH) {
-              matchedIds.add(p.id);
-              continue;
-            }
-
-            // Distinct word match
             const pWords = p.full_name.trim().toLowerCase().split(/\s+/).filter(Boolean);
             const hasWordMatch = targetWords.some(tw => 
               tw.length >= 3 && pWords.some(pw => pw.replace(/h/g, '') === tw.replace(/h/g, ''))
@@ -510,7 +476,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
 
         if (matchedIds.size > 0) {
-          console.log(`[NotificationTable] Resolved "${nameOrId}" ->`, Array.from(matchedIds));
           return Array.from(matchedIds);
         }
       } catch (e) {
@@ -521,63 +486,21 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const recipientIds = new Set<string>();
 
-    // 1. Always include logged in user (creator) so action appears in their panel instantly
-    if (user?.id) {
-      recipientIds.add(user.id);
-    }
-
-    // 2. Direct target user or role
     if (targetUserId) {
       const resolvedTarget = await resolveUserIds(targetUserId);
-      if (resolvedTarget.length > 0) {
-        resolvedTarget.forEach(id => recipientIds.add(id));
-      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetUserId)) {
-        recipientIds.add(targetUserId);
-      }
+      resolvedTarget.forEach(id => recipientIds.add(id));
     }
 
-    // 3. Always include Admins, Chief Sthapathy, and Finance Managers for full visibility
-    try {
-      const { data: allProfiles, error: profileError } = await supabase
-        .from('profiles')
-        .select('id, role, full_name, email');
-
-      if (!profileError && allProfiles && allProfiles.length > 0) {
-        allProfiles.forEach(p => {
-          const r = (p.role || '').toLowerCase();
-          if (
-            r === 'admin' || 
-            r === 'chief_sthapathy' || 
-            r === 'finance_manager' || 
-            r.includes('admin') || 
-            r.includes('chief') ||
-            r.includes('finance')
-          ) {
-            recipientIds.add(p.id);
-          }
-        });
-      }
-    } catch (e) {
-      console.warn('[NotificationTable] Error querying broadcast profiles:', e);
-    }
-
-    // Resolve assigned lead or task assignee from metadata if provided
     if (metadata?.assigned_to) {
-      const ids = await resolveUserIds(metadata.assigned_to);
-      ids.forEach(id => recipientIds.add(id));
+      (await resolveUserIds(metadata.assigned_to)).forEach(id => recipientIds.add(id));
     }
-
     if (metadata?.task_assignee || metadata?.task_assigned_to) {
-      const ids = await resolveUserIds(metadata.task_assignee || metadata.task_assigned_to);
-      ids.forEach(id => recipientIds.add(id));
+      (await resolveUserIds(metadata.task_assignee || metadata.task_assigned_to)).forEach(id => recipientIds.add(id));
     }
-
     if (metadata?.project_assignee) {
-      const ids = await resolveUserIds(metadata.project_assignee);
-      ids.forEach(id => recipientIds.add(id));
+      (await resolveUserIds(metadata.project_assignee)).forEach(id => recipientIds.add(id));
     }
 
-    // Automatically resolve and notify assigned lead for project if project_id or project_name is present
     const resolvedProjectId = metadata?.project_id || (metadata?.type === 'project' ? metadata?.id : null);
     if (resolvedProjectId || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
       try {
@@ -589,67 +512,59 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
         const { data: projData } = await pQuery.maybeSingle();
         if (projData?.assigned_to) {
-          const ids = await resolveUserIds(projData.assigned_to);
-          ids.forEach(id => recipientIds.add(id));
+          (await resolveUserIds(projData.assigned_to)).forEach(id => recipientIds.add(id));
         }
       } catch (e) {
-        console.warn('[NotificationTable] Error resolving assigned project lead:', e);
+        console.warn('[NotificationTable] Error resolving project lead:', e);
       }
     }
 
-    // Filter recipientIds to strictly contain only valid UUIDs to prevent database schema errors
     const validUuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const finalRecipientIds = new Set(Array.from(recipientIds).filter(id => validUuidRegex.test(id)));
+    const finalRecipientIds = Array.from(recipientIds).filter(id => validUuidRegex.test(id));
 
-    if (finalRecipientIds.size === 0) {
-      console.warn('[NotificationTable] No valid target recipient UUIDs found to insert notification.');
+    if (finalRecipientIds.length === 0) {
+      console.warn('[NotificationTable] No valid target recipient UUIDs found.');
       return;
     }
 
-    // Immediately trigger local OS push notification ONLY IF the current logged in user is actually one of the intended finalRecipientIds
-    if (user?.id && finalRecipientIds.has(user.id)) {
-      triggerNativePushNotification(title, message, metadata);
+
+    // 1. ALWAYS Insert notification entries into Supabase DB client-side to use auth
+    const newNotifications = finalRecipientIds.map(uId => ({
+      user_id: uId,
+      title,
+      message: finalMessage,
+      read: false
+    }));
+
+    const { error: batchError } = await supabase.from('notifications').insert(newNotifications);
+    if (batchError) {
+      console.warn('[NotificationTable] Batch DB insert error:', batchError.message || batchError);
+      setRlsError(true);
+      if (!batchError.message?.includes('duplicate')) {
+        toast.error("Database RLS Policy Blocks Notifications. Run the SQL fix provided by the assistant.");
+      }
+    } else {
+      console.log(`[NotificationTable] Successfully created ${newNotifications.length} notification record(s) in Supabase DB.`);
+      fetchNotifications(); // update local state with new DB records
     }
 
-    // Optimistically add to current user's local notification list if relevant
-    if (user?.id && (!targetUserId || targetUserId === user.id || finalRecipientIds.has(user.id))) {
-      const optimisticNotif: Notification = {
-        id: 'opt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-        user_id: user.id,
+    // 2. Realtime Broadcast to online devices
+
+    try {
+      const notifPayload = {
+        id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
         title,
         message: finalMessage,
         read: false,
         created_at: new Date().toISOString()
       };
-      setNotifications(prev => [optimisticNotif, ...prev.filter(n => n.id !== optimisticNotif.id)]);
-    }
 
-    const notifPayload = {
-      id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      title,
-      message: finalMessage,
-      read: false,
-      created_at: new Date().toISOString()
-    };
-
-    // Broadcast in real-time to all online devices via active Supabase Broadcast channel
-    try {
       if (realtimeChannelRef.current) {
         realtimeChannelRef.current.send({
           type: 'broadcast',
           event: 'new_notification',
           payload: {
-            recipientIds: Array.from(finalRecipientIds),
-            notification: notifPayload
-          }
-        });
-      } else {
-        // Fallback channel send if ref not yet initialized
-        supabase.channel('notifications_changes').send({
-          type: 'broadcast',
-          event: 'new_notification',
-          payload: {
-            recipientIds: Array.from(finalRecipientIds),
+            recipientIds: finalRecipientIds,
             notification: notifPayload
           }
         });
@@ -658,88 +573,20 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.warn('[NotificationTable] Realtime broadcast notice:', e);
     }
 
-    // Try server endpoint first to bypass client RLS issues (if Service Role is configured)
+    // 3. Dispatch to Server Endpoint for Push Delivery across devices
     try {
-      const serverRes = await fetch('/api/notifications/create', {
+      await fetch('/api/notifications/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipientIds: Array.from(finalRecipientIds),
+          recipientIds: finalRecipientIds,
           title,
           message,
           metadata
         })
       });
-      if (serverRes.ok) {
-        console.log(`[NotificationTable] Created notification records via backend API.`);
-        fetchNotifications();
-        return;
-      } else if (serverRes.status === 403) {
-        // Backend failed due to RLS as well
-        if (user?.role === 'admin') {
-           setRlsError(true);
-           toast.error(
-             "Database RLS Policy Blocks Notifications!", 
-             { 
-               description: "To fix, go to Supabase SQL Editor and run: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);",
-               duration: 20000,
-             }
-           );
-        }
-      }
     } catch (apiErr) {
-      console.warn('[NotificationTable] Server API insert fallback:', apiErr);
-    }
-
-    // Direct Supabase client insert as secondary mechanism
-    const newNotifications = Array.from(finalRecipientIds).map(uId => ({
-      user_id: uId,
-      title,
-      message: finalMessage,
-      read: false
-    }));
-
-    const { error: batchError } = await supabase.from('notifications').insert(newNotifications);
-
-    if (!batchError) {
-      console.log(`[NotificationTable] Successfully created ${newNotifications.length} notification record(s) in Supabase.`);
-      fetchNotifications();
-      return;
-    }
-
-    console.debug('[NotificationTable] Batch insert notice:', batchError.message);
-
-    // Individual insert fallback: insert one by one so valid user IDs succeed
-    let rlsNoticeTriggered = false;
-    for (const uId of finalRecipientIds) {
-      const { error: singleError } = await supabase.from('notifications').insert({
-        user_id: uId,
-        title,
-        message: finalMessage,
-        read: false
-      });
-      if (singleError) {
-        console.debug(`[NotificationTable] User ID ${uId} insert notice:`, singleError.message);
-        if (singleError.message.includes('row-level security') || singleError.message.includes('RLS') || singleError.code === '42501') {
-          rlsNoticeTriggered = true;
-        }
-      } else {
-        console.log(`[NotificationTable] Successfully inserted notification for user_id ${uId}`);
-      }
-    }
-
-    fetchNotifications();
-
-    if (rlsNoticeTriggered && user?.role === 'admin') {
-      setRlsError(true);
-      console.info("[NotificationTable] RLS blocked cross-user notifications.");
-      toast.error(
-        "Database RLS Policy Blocks Notifications!", 
-        { 
-          description: "To fix, go to Supabase SQL Editor and run: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);",
-          duration: 20000,
-        }
-      );
+      console.warn('[NotificationTable] VAPID push API endpoint warning:', apiErr);
     }
   };
 
@@ -757,11 +604,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const testMsg = 'Real-time VAPID web push notifications are working!';
 
     toast.success('Test VAPID push notification triggered!');
-
-    // Trigger OS level browser popup
     triggerNativePushNotification(testTitle, testMsg);
-
-    // Also insert into database table
     await addNotification(testTitle, testMsg, user?.id);
   };
 
