@@ -220,8 +220,61 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (user?.id) {
       fetchNotifications();
       checkDeadlines();
+
+      const handleIncomingNotif = (newNotif: Notification) => {
+        setNotifications(prev => {
+          if (prev.some(n => n.id === newNotif.id || (n.title === newNotif.title && n.message === newNotif.message && Math.abs(new Date(n.created_at).getTime() - new Date(newNotif.created_at).getTime()) < 5000))) {
+            return prev;
+          }
+          return [newNotif, ...prev];
+        });
+
+        // Play auditory cue
+        try {
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gainNode = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.1);
+          gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+          osc.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.25);
+        } catch (e) {
+          console.debug('Auditory cue note');
+        }
+
+        const messageParts = (newNotif.message || '').split(' ||METADATA||');
+        const cleanMessage = messageParts[0];
+        let metadata: any = null;
+        if (messageParts.length > 1) {
+          try {
+            metadata = JSON.parse(messageParts[1]);
+          } catch (e) {
+            console.error('Error parsing metadata:', e);
+          }
+        }
+
+        // In-app toast banner
+        toast(newNotif.title, {
+          description: cleanMessage,
+          duration: 8000,
+          action: metadata ? {
+            label: 'View',
+            onClick: () => {
+              window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
+            }
+          } : undefined,
+        });
+
+        // OS Push Notification
+        triggerNativePushNotification(newNotif.title, cleanMessage, metadata);
+      };
       
-      // Subscribe to new notifications
+      // Subscribe to postgres changes and real-time broadcast channel
       const channel = supabase
         .channel('notifications_changes')
         .on('postgres_changes', { 
@@ -230,52 +283,19 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           table: 'notifications',
           filter: `user_id=eq.${user.id}`
         }, (payload) => {
-          const newNotif = payload.new as Notification;
-          setNotifications(prev => [newNotif, ...prev]);
-
-          // Play auditory cue
-          try {
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(783.99, audioCtx.currentTime + 0.1);
-            gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
-            osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.25);
-          } catch (e) {
-            console.debug('Auditory cue note');
+          handleIncomingNotif(payload.new as Notification);
+        })
+        .on('broadcast', { event: 'new_notification' }, (payload) => {
+          const { recipientIds, notification } = payload.payload || {};
+          const isTargeted = Array.isArray(recipientIds) && (recipientIds.includes(user.id) || recipientIds.length === 0);
+          const isAdminRole = user.role === 'admin' || user.role === 'chief_sthapathy' || user.role === 'finance_manager';
+          
+          if (isTargeted || isAdminRole) {
+            handleIncomingNotif({
+              ...notification,
+              user_id: user.id
+            });
           }
-
-          const messageParts = (newNotif.message || '').split(' ||METADATA||');
-          const cleanMessage = messageParts[0];
-          let metadata: any = null;
-          if (messageParts.length > 1) {
-            try {
-              metadata = JSON.parse(messageParts[1]);
-            } catch (e) {
-              console.error('Error parsing metadata:', e);
-            }
-          }
-
-          // In-app toast banner
-          toast(newNotif.title, {
-            description: cleanMessage,
-            duration: 8000,
-            action: metadata ? {
-              label: 'View',
-              onClick: () => {
-                window.dispatchEvent(new CustomEvent('app-notification-click', { detail: { ...newNotif, metadata } }));
-              }
-            } : undefined,
-          });
-
-          // OS Push Notification
-          triggerNativePushNotification(newNotif.title, cleanMessage, metadata);
         })
         .subscribe();
 
@@ -283,7 +303,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         supabase.removeChannel(channel);
       };
     }
-  }, [user?.id]);
+  }, [user?.id, user?.role]);
 
   const fetchNotifications = async () => {
     if (!user) return;
@@ -464,17 +484,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
-    // Always query admins and chief_sthapathys for broadcast updates
+    // Always query admins, chief_sthapathys, and finance_managers for broadcast updates
     try {
-      const { data: admins, error: profileError } = await supabase
+      const { data: allProfiles, error: profileError } = await supabase
         .from('profiles')
-        .select('id')
-        .in('role', ['admin', 'chief_sthapathy']);
+        .select('id, role, full_name, email');
 
       if (profileError) {
-        console.warn('[NotificationTable] Could not fetch admin profiles for broadcast:', profileError.message);
-      } else if (admins && admins.length > 0) {
-        admins.forEach(admin => recipientIds.add(admin.id));
+        console.warn('[NotificationTable] Could not fetch profiles for broadcast:', profileError.message);
+      } else if (allProfiles && allProfiles.length > 0) {
+        allProfiles.forEach(p => {
+          const r = (p.role || '').toLowerCase();
+          if (
+            r === 'admin' || 
+            r === 'chief_sthapathy' || 
+            r === 'finance_manager' || 
+            r.includes('admin') || 
+            r.includes('chief') ||
+            r.includes('finance')
+          ) {
+            recipientIds.add(p.id);
+          }
+        });
       }
     } catch (e) {
       console.warn('[NotificationTable] Error querying admin profiles:', e);
@@ -533,7 +564,29 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setNotifications(prev => [optimisticNotif, ...prev.filter(n => n.id !== optimisticNotif.id)]);
     }
 
-    // Try batch insert first
+    const notifPayload = {
+      id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      title,
+      message: finalMessage,
+      read: false,
+      created_at: new Date().toISOString()
+    };
+
+    // Broadcast in real-time to all online devices via Supabase Broadcast channel
+    try {
+      supabase.channel('notifications_changes').send({
+        type: 'broadcast',
+        event: 'new_notification',
+        payload: {
+          recipientIds: Array.from(recipientIds),
+          notification: notifPayload
+        }
+      });
+    } catch (e) {
+      console.warn('[NotificationTable] Realtime broadcast notice:', e);
+    }
+
+    // Try batch insert into database table first
     const newNotifications = Array.from(recipientIds).map(uId => ({
       user_id: uId,
       title,
@@ -548,9 +601,10 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       return;
     }
 
-    console.debug('[NotificationTable] Batch insert notice (some user IDs may not exist in auth.users):', batchError.message);
+    console.debug('[NotificationTable] Batch insert notice:', batchError.message);
 
-    // Individual insert fallback: insert one by one so valid user IDs (like current user) succeed
+    // Individual insert fallback: insert one by one so valid user IDs succeed
+    let rlsNoticeTriggered = false;
     for (const uId of recipientIds) {
       const { error: singleError } = await supabase.from('notifications').insert({
         user_id: uId,
@@ -559,10 +613,17 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         read: false
       });
       if (singleError) {
-        console.debug(`[NotificationTable] User ID ${uId} not in auth.users or restricted by RLS:`, singleError.message);
+        console.debug(`[NotificationTable] User ID ${uId} insert notice:`, singleError.message);
+        if (singleError.message.includes('row-level security') || singleError.message.includes('RLS') || singleError.code === '42501') {
+          rlsNoticeTriggered = true;
+        }
       } else {
         console.log(`[NotificationTable] Successfully inserted notification for user_id ${uId}`);
       }
+    }
+
+    if (rlsNoticeTriggered && user?.role === 'admin') {
+      console.info("[NotificationTable] Note: If cross-user notifications are blocked by Supabase RLS policies, run SQL: CREATE POLICY \"Enable insert for all authenticated users\" ON public.notifications FOR INSERT TO authenticated WITH CHECK (true);");
     }
   };
 
