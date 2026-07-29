@@ -109,7 +109,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({ open, onOpen
           u => u.full_name === formData.assigned_to || 
                u.id === formData.assigned_to || 
                u.email === formData.assigned_to ||
-               (u.role && (u.role.toLowerCase() === formData.assigned_to.toLowerCase().replace(/\s+/g, '_') || formData.assigned_to.toLowerCase().includes(u.role.toLowerCase())))
+               (u.role && (u.role.toLowerCase() === formData.assigned_to.toLowerCase().replace(/\s+/g, '_') ))
         );
         const targetId = assignee ? assignee.id : formData.assigned_to;
         
