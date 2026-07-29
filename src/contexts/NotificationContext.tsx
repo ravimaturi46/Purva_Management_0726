@@ -42,6 +42,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const { user } = useUser();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [browserPermission, setBrowserPermission] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('default');
+  const realtimeChannelRef = React.useRef<any>(null);
+  const currentUserIdsRef = React.useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (user?.id) {
+      const ids = new Set<string>([user.id]);
+      if (user.email) {
+        supabase
+          .from('profiles')
+          .select('id')
+          .ilike('email', user.email.trim())
+          .then(({ data, error }) => {
+            if (!error && data) data.forEach(p => ids.add(p.id));
+            currentUserIdsRef.current = ids;
+          });
+      } else {
+        currentUserIdsRef.current = ids;
+      }
+    } else {
+      currentUserIdsRef.current = new Set();
+    }
+  }, [user?.id, user?.email]);
 
   const subscribeUserToPush = async (userId: string) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -276,41 +298,67 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       
       // Subscribe to postgres changes and real-time broadcast channel
       const channel = supabase
-        .channel('notifications_changes')
+        .channel('notifications_changes', {
+          config: { broadcast: { self: true } }
+        })
         .on('postgres_changes', { 
           event: 'INSERT', 
           schema: 'public', 
-          table: 'notifications',
-          filter: `user_id=eq.${user.id}`
+          table: 'notifications'
         }, (payload) => {
-          handleIncomingNotif(payload.new as Notification);
+          const newNotif = payload.new as Notification;
+          if (currentUserIdsRef.current.has(newNotif.user_id)) {
+            handleIncomingNotif(newNotif);
+          }
         })
         .on('broadcast', { event: 'new_notification' }, (payload) => {
           const { recipientIds, notification } = payload.payload || {};
-          const isTargeted = Array.isArray(recipientIds) && (recipientIds.includes(user.id) || recipientIds.length === 0);
-          const isAdminRole = user.role === 'admin' || user.role === 'chief_sthapathy' || user.role === 'finance_manager';
+          const isTargeted = Array.isArray(recipientIds) && recipientIds.some(id => currentUserIdsRef.current.has(id));
+          const isBroadcast = !recipientIds || recipientIds.length === 0;
           
-          if (isTargeted || isAdminRole) {
+          if (isTargeted || isBroadcast) {
             handleIncomingNotif({
               ...notification,
               user_id: user.id
             });
           }
         })
-        .subscribe();
+        .subscribe((status) => {
+          console.log('[NotificationContext] Realtime subscription status:', status);
+        });
+
+      realtimeChannelRef.current = channel;
 
       return () => {
         supabase.removeChannel(channel);
+        realtimeChannelRef.current = null;
       };
     }
-  }, [user?.id, user?.role]);
+  }, [user?.id, user?.role, user?.email]);
 
   const fetchNotifications = async () => {
     if (!user) return;
+    
+    // Find all IDs associated with this user's auth ID or email profile
+    const userIds = new Set<string>([user.id]);
+    try {
+      if (user.email) {
+        const { data: matchedProfiles } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('email', user.email.trim());
+        if (matchedProfiles) {
+          matchedProfiles.forEach(p => userIds.add(p.id));
+        }
+      }
+    } catch (e) {
+      console.warn('Error fetching matching profile IDs:', e);
+    }
+
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
-      .eq('user_id', user.id)
+      .in('user_id', Array.from(userIds))
       .order('created_at', { ascending: false });
     
     if (!error && data) {
@@ -390,17 +438,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       ? `${message} ||METADATA||${JSON.stringify(metadata)}`
       : message;
 
-    // Immediately attempt local native push notification for real-time desktop / mobile OS alert
-    if (!targetUserId || targetUserId === user?.id || user?.role === 'admin' || user?.role === 'chief_sthapathy') {
-      triggerNativePushNotification(title, message, metadata);
-    }
-
     const resolveUserIds = async (nameOrId: string | null | undefined): Promise<string[]> => {
       if (!nameOrId || nameOrId === 'Unassigned' || nameOrId === 'N/A') return [];
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
       try {
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
-
-        const { data: allProfiles, error } = await supabase.from('profiles').select('id, full_name, email');
+        const { data: allProfiles, error } = await supabase.from('profiles').select('id, full_name, email, role');
         if (error || !allProfiles || allProfiles.length === 0) {
           if (isUuid) return [nameOrId];
           return [];
@@ -420,41 +462,43 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         const targetWords = nameOrId.trim().toLowerCase().split(/\s+/).filter(Boolean);
 
         for (const p of allProfiles) {
-          if (!p.full_name) {
-            if (p.email && p.email.toLowerCase() === nameOrId.trim().toLowerCase()) {
+          const pRoleNorm = (p.role || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+          // Role match (e.g. "Finance Manager" -> role: "finance_manager")
+          if (pRoleNorm && (pRoleNorm === targetNorm || targetNorm.includes(pRoleNorm) || pRoleNorm.includes(targetNorm))) {
+            matchedIds.add(p.id);
+            continue;
+          }
+
+          if (p.email && p.email.trim().toLowerCase() === nameOrId.trim().toLowerCase()) {
+            matchedIds.add(p.id);
+            continue;
+          }
+
+          if (p.full_name) {
+            const pNorm = p.full_name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+            const pNoH = pNorm.replace(/h/g, '');
+
+            // Exact name match
+            if (pNorm === targetNorm) {
+              matchedIds.add(p.id);
+              continue;
+            }
+
+            // Spelling variation match
+            if (pNoH === targetNoH) {
+              matchedIds.add(p.id);
+              continue;
+            }
+
+            // Distinct word match
+            const pWords = p.full_name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+            const hasWordMatch = targetWords.some(tw => 
+              tw.length >= 3 && pWords.some(pw => pw.replace(/h/g, '') === tw.replace(/h/g, ''))
+            );
+            if (hasWordMatch) {
               matchedIds.add(p.id);
             }
-            continue;
-          }
-
-          const pNorm = p.full_name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-          const pNoH = pNorm.replace(/h/g, '');
-
-          // Exact match
-          if (pNorm === targetNorm) {
-            matchedIds.add(p.id);
-            continue;
-          }
-
-          // Spelling variation match (e.g. Dhyanesh vs Dyanesh)
-          if (pNoH === targetNoH) {
-            matchedIds.add(p.id);
-            continue;
-          }
-
-          // Email match
-          if (p.email && p.email.toLowerCase() === nameOrId.trim().toLowerCase()) {
-            matchedIds.add(p.id);
-            continue;
-          }
-
-          // Distinct word match
-          const pWords = p.full_name.trim().toLowerCase().split(/\s+/).filter(Boolean);
-          const hasWordMatch = targetWords.some(tw => 
-            tw.length >= 3 && pWords.some(pw => pw.replace(/h/g, '') === tw.replace(/h/g, ''))
-          );
-          if (hasWordMatch) {
-            matchedIds.add(p.id);
           }
         }
 
@@ -465,50 +509,44 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       } catch (e) {
         console.warn('[NotificationTable] Error resolving user ID:', nameOrId, e);
       }
-      return [];
+      return isUuid ? [nameOrId] : [];
     };
 
     const recipientIds = new Set<string>();
 
-    // Always include current logged-in user so at least one valid auth.users row is inserted
-    if (user?.id) {
-      recipientIds.add(user.id);
-    }
-
     if (targetUserId) {
+      // Direct targeting: ONLY add the specified target user(s)
       const resolvedTarget = await resolveUserIds(targetUserId);
       if (resolvedTarget.length > 0) {
         resolvedTarget.forEach(id => recipientIds.add(id));
       } else {
         recipientIds.add(targetUserId);
       }
-    }
+    } else {
+      // General Broadcast: Notify all Admins, Chief Sthapathy, and Finance Managers
+      try {
+        const { data: allProfiles, error: profileError } = await supabase
+          .from('profiles')
+          .select('id, role, full_name, email');
 
-    // Always query admins, chief_sthapathys, and finance_managers for broadcast updates
-    try {
-      const { data: allProfiles, error: profileError } = await supabase
-        .from('profiles')
-        .select('id, role, full_name, email');
-
-      if (profileError) {
-        console.warn('[NotificationTable] Could not fetch profiles for broadcast:', profileError.message);
-      } else if (allProfiles && allProfiles.length > 0) {
-        allProfiles.forEach(p => {
-          const r = (p.role || '').toLowerCase();
-          if (
-            r === 'admin' || 
-            r === 'chief_sthapathy' || 
-            r === 'finance_manager' || 
-            r.includes('admin') || 
-            r.includes('chief') ||
-            r.includes('finance')
-          ) {
-            recipientIds.add(p.id);
-          }
-        });
+        if (!profileError && allProfiles && allProfiles.length > 0) {
+          allProfiles.forEach(p => {
+            const r = (p.role || '').toLowerCase();
+            if (
+              r === 'admin' || 
+              r === 'chief_sthapathy' || 
+              r === 'finance_manager' || 
+              r.includes('admin') || 
+              r.includes('chief') ||
+              r.includes('finance')
+            ) {
+              recipientIds.add(p.id);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('[NotificationTable] Error querying broadcast profiles:', e);
       }
-    } catch (e) {
-      console.warn('[NotificationTable] Error querying admin profiles:', e);
     }
 
     // Resolve assigned lead or task assignee from metadata if provided
@@ -527,7 +565,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       ids.forEach(id => recipientIds.add(id));
     }
 
-    // Automatically resolve and notify the assigned lead for the project from database if not explicitly passed
+    // Automatically resolve and notify assigned lead for project if project_id or project_name is present
     if (metadata?.project_id || (metadata?.project_name && metadata?.project_name !== 'N/A')) {
       try {
         let pQuery = supabase.from('projects').select('assigned_to');
@@ -551,6 +589,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       return;
     }
 
+    // Immediately trigger local OS push notification ONLY IF the current logged in user is actually one of the intended recipientIds
+    if (user?.id && recipientIds.has(user.id)) {
+      triggerNativePushNotification(title, message, metadata);
+    }
+
     // Optimistically add to current user's local notification list if relevant
     if (user?.id && (!targetUserId || targetUserId === user.id || recipientIds.has(user.id))) {
       const optimisticNotif: Notification = {
@@ -572,16 +615,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       created_at: new Date().toISOString()
     };
 
-    // Broadcast in real-time to all online devices via Supabase Broadcast channel
+    // Broadcast in real-time to all online devices via active Supabase Broadcast channel
     try {
-      supabase.channel('notifications_changes').send({
-        type: 'broadcast',
-        event: 'new_notification',
-        payload: {
-          recipientIds: Array.from(recipientIds),
-          notification: notifPayload
-        }
-      });
+      if (realtimeChannelRef.current) {
+        realtimeChannelRef.current.send({
+          type: 'broadcast',
+          event: 'new_notification',
+          payload: {
+            recipientIds: Array.from(recipientIds),
+            notification: notifPayload
+          }
+        });
+      } else {
+        // Fallback channel send if ref not yet initialized
+        supabase.channel('notifications_changes').send({
+          type: 'broadcast',
+          event: 'new_notification',
+          payload: {
+            recipientIds: Array.from(recipientIds),
+            notification: notifPayload
+          }
+        });
+      }
     } catch (e) {
       console.warn('[NotificationTable] Realtime broadcast notice:', e);
     }

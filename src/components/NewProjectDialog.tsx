@@ -104,16 +104,21 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({ open, onOpen
       );
       
       // Notify assignee
-      if (formData.assigned_to && formData.assigned_to !== 'Unassigned' && user && formData.assigned_to !== user.full_name) {
-        const assignee = allUsers.find(u => u.full_name === formData.assigned_to || u.id === formData.assigned_to);
-        if (assignee && assignee.id !== user.id) {
-          await addNotification(
-            'New Project Assigned',
-            `${user.full_name} assigned you to a new project: "${formData.name}"`,
-            assignee.id,
-            { type: 'project', id: projectData.id, project_name: projectData.name }
-          );
-        }
+      if (formData.assigned_to && formData.assigned_to !== 'Unassigned') {
+        const assignee = allUsers.find(
+          u => u.full_name === formData.assigned_to || 
+               u.id === formData.assigned_to || 
+               u.email === formData.assigned_to ||
+               (u.role && (u.role.toLowerCase() === formData.assigned_to.toLowerCase().replace(/\s+/g, '_') || formData.assigned_to.toLowerCase().includes(u.role.toLowerCase())))
+        );
+        const targetId = assignee ? assignee.id : formData.assigned_to;
+        
+        await addNotification(
+          'New Project Assigned',
+          `${user?.full_name || 'Admin'} assigned you to a new project: "${formData.name}"`,
+          targetId,
+          { type: 'project', id: projectData.id, project_name: projectData.name }
+        );
       }
       
       toast.success('Project created successfully');
