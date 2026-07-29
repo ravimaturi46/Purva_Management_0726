@@ -307,7 +307,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           table: 'notifications'
         }, (payload) => {
           const newNotif = payload.new as Notification;
-          if (currentUserIdsRef.current.has(newNotif.user_id)) {
+          const isAdminRole = user?.role === 'admin' || user?.role === 'chief_sthapathy' || user?.role === 'finance_manager';
+          if (currentUserIdsRef.current.has(newNotif.user_id) || isAdminRole) {
             handleIncomingNotif(newNotif);
           }
         })
@@ -315,8 +316,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const { recipientIds, notification } = payload.payload || {};
           const isTargeted = Array.isArray(recipientIds) && recipientIds.some(id => currentUserIdsRef.current.has(id));
           const isBroadcast = !recipientIds || recipientIds.length === 0;
+          const isAdminRole = user?.role === 'admin' || user?.role === 'chief_sthapathy' || user?.role === 'finance_manager';
           
-          if (isTargeted || isBroadcast) {
+          if (isTargeted || isBroadcast || isAdminRole) {
             handleIncomingNotif({
               ...notification,
               user_id: user.id
@@ -514,39 +516,44 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const recipientIds = new Set<string>();
 
+    // 1. Always include logged in user (creator) so action appears in their panel instantly
+    if (user?.id) {
+      recipientIds.add(user.id);
+    }
+
+    // 2. Direct target user or role
     if (targetUserId) {
-      // Direct targeting: ONLY add the specified target user(s)
       const resolvedTarget = await resolveUserIds(targetUserId);
       if (resolvedTarget.length > 0) {
         resolvedTarget.forEach(id => recipientIds.add(id));
       } else {
         recipientIds.add(targetUserId);
       }
-    } else {
-      // General Broadcast: Notify all Admins, Chief Sthapathy, and Finance Managers
-      try {
-        const { data: allProfiles, error: profileError } = await supabase
-          .from('profiles')
-          .select('id, role, full_name, email');
+    }
 
-        if (!profileError && allProfiles && allProfiles.length > 0) {
-          allProfiles.forEach(p => {
-            const r = (p.role || '').toLowerCase();
-            if (
-              r === 'admin' || 
-              r === 'chief_sthapathy' || 
-              r === 'finance_manager' || 
-              r.includes('admin') || 
-              r.includes('chief') ||
-              r.includes('finance')
-            ) {
-              recipientIds.add(p.id);
-            }
-          });
-        }
-      } catch (e) {
-        console.warn('[NotificationTable] Error querying broadcast profiles:', e);
+    // 3. Always include Admins, Chief Sthapathy, and Finance Managers for full visibility
+    try {
+      const { data: allProfiles, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, role, full_name, email');
+
+      if (!profileError && allProfiles && allProfiles.length > 0) {
+        allProfiles.forEach(p => {
+          const r = (p.role || '').toLowerCase();
+          if (
+            r === 'admin' || 
+            r === 'chief_sthapathy' || 
+            r === 'finance_manager' || 
+            r.includes('admin') || 
+            r.includes('chief') ||
+            r.includes('finance')
+          ) {
+            recipientIds.add(p.id);
+          }
+        });
       }
+    } catch (e) {
+      console.warn('[NotificationTable] Error querying broadcast profiles:', e);
     }
 
     // Resolve assigned lead or task assignee from metadata if provided
